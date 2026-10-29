@@ -639,7 +639,10 @@ function makeLiveAPI(){
       const legalAllowed = S.role === "admin" || (S.role === "editor" && S.member && S.member.dept === CONFIG.LEGAL_DEPT);
       const [lc, le] = legalAllowed ? await Promise.all([fetchOptional("legal_cases"), fetchOptional("legal_events")]) : [{ ok: true, data: [] }, { ok: true, data: [] }];
       const ph = await S.sb.from("clawback_lines").select("phone_mask").limit(1);
-      return { statements, lines, actions, members, taxRows: tx.data, taxLog: tl.data, taxOK: tx.ok && tl.ok, cases: lc.data, events: le.data, legalOK: lc.ok && le.ok, phoneOK: !ph.error, notes: {}, notesOK: false, legalEditOK: false };
+      const nt = await fetchOptional("partner_notes"), notes = {};
+      nt.data.forEach(n => { (notes[n.partner] = notes[n.partner] || []).push({ id: n.id, body: n.body, dept: n.dept || "", by: n.created_by || "", at: n.created_at, to_dept: n.to_dept || undefined, req_status: n.req_status || undefined, due: n.due || "", status_dept: n.status_dept || "", status_by: n.status_by || "", status_at: n.status_at || "" }); });
+      const ee = legalAllowed && le.ok ? await S.sb.from("legal_events").select("edited_at").limit(1) : null;
+      return { statements, lines, actions, members, taxRows: tx.data, taxLog: tl.data, taxOK: tx.ok && tl.ok, cases: lc.data, events: le.data, legalOK: lc.ok && le.ok, phoneOK: !ph.error, notes, notesOK: nt.ok, legalEditOK: !!ee && !ee.error };
     },
     async saveStatement(stmt, lines, overwrite){
       const { data, error } = await S.sb.rpc("save_statement", { p_stmt: stmt, p_lines: lines, p_overwrite: !!overwrite });
@@ -665,10 +668,10 @@ function makeLiveAPI(){
     async legalUpdate(caseId, stage, nextLabel, nextDate, title, note, on){
       await rpc("legal_update", { p_case: caseId, p_stage: stage, p_next_label: nextLabel || null, p_next_date: nextDate || null, p_title: title, p_note: note || null, p_on: on });
     },
-    async addNote(){ throw new Error("메모(Notice) 기능이 아직 설정되지 않았어요."); },
-    async setRequestStatus(){ throw new Error("업무 요청 기능이 아직 설정되지 않았어요."); },
-    async deleteNote(){ throw new Error("메모(Notice) 기능이 아직 설정되지 않았어요."); },
-    async legalEditEvent(){ throw new Error("이력 메모 수정 기능이 아직 설정되지 않았어요."); },
+    async addNote(partner, body, req){ return rpc("note_add", { p_partner: partner, p_body: body, p_to_dept: req && req.to_dept ? req.to_dept : null, p_due: req && req.due ? req.due : null }); },
+    async setRequestStatus(id, status){ await rpc("note_set_status", { p_id: id, p_status: status }); },
+    async deleteNote(id){ await rpc("note_delete", { p_id: id }); },
+    async legalEditEvent(id, note){ await rpc("legal_event_edit", { p_event: id, p_note: note || "" }); },
     async legalDelete(caseId){
       const { data, error } = await S.sb.from("legal_cases").delete().eq("id", caseId).select();
       if (error) throw new Error(error.message);
@@ -768,6 +771,7 @@ function subscribeRealtime(){
     const tables = ["statements", "clawback_lines", "actions", "members"];
     if (S.taxOK) tables.push("tax_status", "tax_status_log");
     if (S.legalOK && can.legal()) tables.push("legal_cases", "legal_events");
+    if (S.notesOK) tables.push("partner_notes");
     tables.forEach(t => S.channel.on("postgres_changes", { event: "*", schema: "public", table: t }, scheduleReload));
     S.channel.subscribe();
   } catch (e) { console.warn("실시간 연결 실패", e); }
@@ -777,8 +781,9 @@ function scheduleReload(){
   scheduleReload.t = setTimeout(async () => { try { await reload(); safeRender(); } catch (e) { console.error(e); } }, 700);
 }
 function safeRender(){
-  const a = document.activeElement;
-  if (a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && $("#view") && $("#view").contains(a)){ S.dirty = true; return; }
+  const a = document.activeElement, typing = a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName);
+  if (typing && $("#view") && $("#view").contains(a)){ S.dirty = true; return; }
+  if (typing && (($("#notice") && $("#notice").contains(a)) || ($("#modal") && $("#modal").contains(a)))){ S.dirty = true; renderBell(); return; }
   S.dirty = false; renderTab();
 }
 function renderLogin(msg){
