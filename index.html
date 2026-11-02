@@ -89,7 +89,7 @@ tr.tot td{background:#F7F8FA;font-weight:800}
 .banner{background:#FFF8E1;border-radius:16px;padding:12px 16px;font-weight:700;text-align:center;color:#3B3000}
 .empty{padding:30px;text-align:center;color:#6B7684}
 .row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
-select,input[type=text],input[type=number],input[type=date]{height:44px;border:1px solid #D9DEE5;border-radius:12px;padding:0 12px;font-size:14.5px;background:#fff;color:#191F28;min-width:0}
+select,input[type=text],input[type=password],input[type=email],input[type=number],input[type=date]{height:44px;border:1px solid #D9DEE5;border-radius:12px;padding:0 12px;font-size:14.5px;background:#fff;color:#191F28;min-width:0}
 label.f{display:block;font-size:12.5px;color:#6B7684;margin-bottom:4px}
 .grid-f{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
 .grid-f select,.grid-f input{width:100%}
@@ -294,7 +294,7 @@ const CONFIG = {
   NAME_MASK: "middle",     // 고객명 가리는 방식: "middle" → 김○미 / "first" → 김○○
   VAT: 0.10,               // 정발행·역발행 합계 계산용 부가세율
   WITHHOLDING: 0.033,      // 원천세율
-  ID_DOMAIN: "",           // 아이디 로그인용 도메인 (예: 회사 메일 도메인). 계정은 Supabase에 '아이디@이 도메인'으로 만듭니다.
+  ID_DOMAIN: "wooorii.co.kr",           // 아이디 로그인용 도메인 (예: 회사 메일 도메인). 계정은 Supabase에 '아이디@이 도메인'으로 만듭니다.
   MIN_PASSWORD: 8,         // 앱에서 비밀번호를 바꿀 때 최소 글자 수
   LEGAL_DEPT: "환수관리팀",  // 법률진행을 볼 수 있는 '처리 담당' 부서 (관리자는 항상 가능)
   DEPTS: ["정산담당부서", "환수관리팀", "경영지원팀"],
