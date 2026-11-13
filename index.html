@@ -629,7 +629,49 @@ const STAGES = ["대상 선정", "내용증명", "지급명령", "소송", "강�
 const REASONS = ["장기 지체", "연락 두절", "상환 거부", "상환 의지 없음", "부재 · 폐업 의심"];
 
 /* ===== PURE LOGIC START (화면과 무관한 계산 부분) ===== */
-const COL = { no: 0, kind: 1, cust: 2, prod: 4, opt: 5, partner: 8, open: 11, amt: 24, settle: 25, note: 27 };
+const COL_LEGACY = { no: 0, kind: 1, cust: 2, prod: 4, opt: 5, partner: 8, open: 11, amt: 24, settle: 25, note: 27, svc: 3 };
+/* 제목 글자로 열을 찾습니다 (열 순서·중간 빈 열·앞쪽 안내 줄이 달라져도 읽어요) */
+const HDR_SYN = {
+  no: ["no", "no.", "번호", "순번", "연번"],
+  kind: ["정산종류", "정산구분", "정산유형", "정산분류", "구분", "종류", "유형"],
+  cust: ["고객명", "고객이름", "고객", "가입자명", "가입자", "성명", "이름"],
+  svc: ["가입서비스", "가입서비스번호", "서비스번호", "가입번호", "서비스관리번호", "회선번호"],
+  prod: ["상품명", "상품", "서비스명"],
+  opt: ["상품옵션", "옵션", "상품옵션명"],
+  partner: ["인수처", "인수처명", "업체", "업체명", "협력점", "협력점명", "거래처", "거래처명", "대리점", "대리점명", "판매점", "판매점명", "점명"],
+  open: ["개통일", "개통일자", "개통날짜", "설치일", "개통"],
+  amt: ["정산금액", "정산금", "정산액", "정산금액원", "지급금액", "지급액"],
+  settle: ["정산예정일", "정산일", "정산예정일자", "정산일자", "지급예정일", "지급예정일자", "지급일", "정산월일"],
+  note: ["정산비고", "비고", "정산사유", "정산내용", "사유", "메모", "정산메모"]
+};
+const HDR_REQUIRED = ["kind", "partner", "amt", "settle", "cust"];
+const HDR_LABEL = { no: "번호(No)", kind: "정산종류", cust: "고객명", svc: "가입서비스", prod: "상품명", opt: "상품옵션", partner: "인수처(업체)", open: "개통일", amt: "정산금액", settle: "정산예정일", note: "정산 비고" };
+const hdrNorm = v => String(v == null ? "" : v).normalize("NFKC").toLowerCase().replace(/[\s\u00a0\u200b*·・:：()（）\[\]{}<>\-_./,]/g, "");
+/* 위에서부터 20줄 안에서 제목 줄을 찾아 열 위치를 돌려줘요. 못 찾으면 어떤 제목이 없는지 알려 줘요 */
+function resolveCols(rows){
+  let best = null;
+  for (let i = 0; i < Math.min(rows.length, 20); i++){
+    const r = rows[i] || [], map = {}, used = new Set();
+    r.forEach((cell, ci) => { const t = hdrNorm(cell); if (t) { map[ci] = t; } });
+    const cols = {};
+    Object.keys(HDR_SYN).forEach(f => {
+      const syn = HDR_SYN[f].map(hdrNorm);
+      let hit = -1;
+      for (const [ci, t] of Object.entries(map)) { if (!used.has(+ci) && syn.includes(t)) { hit = +ci; break; } }       // 이름이 정확히 같은 열 먼저
+      if (hit < 0) for (const [ci, t] of Object.entries(map)) { if (used.has(+ci)) continue; if (syn.some(s => s.length >= 3 && t.includes(s) && !(f === "amt" && /약정|합계|누계|잔액/.test(t)))) { hit = +ci; break; } }   // '정산금액(원)' 처럼 덧붙은 글자 허용
+      if (hit >= 0){ cols[f] = hit; used.add(hit); }
+    });
+    const score = Object.keys(cols).length + HDR_REQUIRED.filter(f => cols[f] != null).length * 2;
+    if (!best || score > best.score) best = { row: i, cols, score, titles: r.map(x => String(x == null ? "" : x).trim()).filter(Boolean) };
+  }
+  if (!best || HDR_REQUIRED.some(f => best.cols[f] == null)){
+    const miss = HDR_REQUIRED.filter(f => !best || best.cols[f] == null).map(f => HDR_LABEL[f]);
+    const seen = (best && best.titles.length ? best.titles : (rows[0] || []).map(x => String(x == null ? "" : x).trim()).filter(Boolean)).slice(0, 24).join(" · ");
+    throw new Error("정산내역서 제목 줄을 찾지 못했습니다. 없는 제목: " + miss.join(", ") + (seen ? " / 파일에서 읽은 제목: " + seen : ""));
+  }
+  return { cols: best.cols, headerRow: best.row, info: Object.keys(best.cols).map(f => (HDR_LABEL[f] || f) + "=" + colLetter(best.cols[f])).join(" · ") };
+}
+function colLetter(i){ let s = "", n = i + 1; while (n > 0){ const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
 function pad2(n){ return String(n).padStart(2, "0"); }
 function toISO(v){
   if (v == null || v === "") return "";
@@ -687,12 +729,7 @@ function parseNote(note, settleISO){
 /* 정산내역서(엑셀)에서 읽은 행 -> 정산서별 요약 + 환수 건. 고객명은 가리고, 가입서비스(회선·가입번호) 열은 기본적으로 읽지 않음
    (서버 보관 방식(SUB_MODE=server)에서 관리자가 withSub=true 로 올릴 때만 sub_no 로 읽어 '보관함'에 따로 저장) */
 function extractFromRows(rows, fileName, maskStyle, withSub){
-  let hdrOK = false;
-  for (let i = 0; i < Math.min(rows.length, 4); i++){
-    const r = rows[i] || [];
-    if (String(r[COL.amt] == null ? "" : r[COL.amt]).includes("정산금액") && String(r[COL.settle] == null ? "" : r[COL.settle]).includes("정산예정")){ hdrOK = true; break; }
-  }
-  if (!hdrOK) throw new Error("정산내역서 양식이 아닙니다. (정산금액·정산예정일 열 위치가 다릅니다)");
+  const RC = resolveCols(rows), COL = Object.assign({}, RC.cols); const COL_SVC = COL.svc == null ? -1 : COL.svc;
   const tm = String(fileName || "").match(/(정발행|역발행|원천세)/);
   const fileTax = tm ? tm[1] : "";
   const groups = new Map(); const skipped = []; const excl = new Map();
@@ -735,6 +772,7 @@ function extractFromRows(rows, fileName, maskStyle, withSub){
   const list = Array.from(groups.values());
   if (!list.length) throw new Error("'일반' 또는 '환수' 행을 찾지 못했습니다.");
   list.forEach(g => { g.warnings = skipped.concat(g.warnings); const eo = excl.get(g.partner + "|" + g.settleDate) || {}; g.excluded = Object.keys(eo).map(k => ({ kind: k, count: eo[k].count, sum: eo[k].sum })); });
+  list.colInfo = RC.info; list.headerRow = RC.headerRow;
   return list;
 }
 function daysBetween(fromISO, toISOv){
@@ -809,14 +847,9 @@ function requestsFor(notes, dept, all){
 function justCompleted(before, after){ return !!before && !!after && before.unresolved > 0 && after.unresolved === 0 && after.carry > 0; }
 /* 가입번호: 화면·서버에는 보관하지 않고, 엑셀을 내려받을 때 원본 정산내역서를 다시 골라 그 자리에서만 맞춰 넣습니다.
    (정산서 등록 때 쓰는 extractFromRows 는 이 열을 읽지 않습니다) */
-const COL_SVC = 3;   // 가입서비스(가입번호) 열
+/* (가입서비스 열은 제목으로 찾습니다) */
 function extractSubNos(rows, fileName, maskStyle){
-  let hdrOK = false;
-  for (let i = 0; i < Math.min(rows.length, 4); i++){
-    const r = rows[i] || [];
-    if (String(r[COL.amt] == null ? "" : r[COL.amt]).includes("정산금액") && String(r[COL.settle] == null ? "" : r[COL.settle]).includes("정산예정")){ hdrOK = true; break; }
-  }
-  if (!hdrOK) throw new Error("정산내역서 양식이 아닙니다. (정산금액·정산예정일 열 위치가 다릅니다)");
+  const RC = resolveCols(rows), COL = Object.assign({}, RC.cols); const COL_SVC = COL.svc == null ? -1 : COL.svc;
   const groups = new Map();
   for (const r of rows){
     if (!r || String(r[COL.kind] == null ? "" : r[COL.kind]).trim() !== "환수") continue;
@@ -1667,7 +1700,7 @@ function vUpload(){
     '<div class="drop" id="drop">정산내역서 엑셀 파일(.xlsx)을 여기에 끌어다 놓거나 눌러서 선택하세요<br><span class="muted small">여러 파일을 한 번에 올릴 수 있어요</span><input type="file" id="file" multiple accept=".xlsx,.xls" style="display:none"></div>' +
     (S.subServerOK && can.manage() ? '<label class="keepsub"><input type="checkbox" id="keepsub"' + (S.keepSub ? " checked" : "") + '> <span><b>가입번호도 함께 보관하기</b><br><span class="muted small">서버의 보관함에 따로 저장돼요. 화면에는 표시하지 않고, 관리자만 업체조회의 엑셀로 꺼낼 수 있어요. 가져올 때마다 조회 기록이 남아요.</span></span></label>' : "") + wmOptionHtml();
   S.staged.forEach((f, fi) => {
-    h += '<div class="card form"><b>' + esc(f.name) + "</b>";
+    h += '<div class="card form"><b>' + esc(f.name) + "</b>" + (f.colInfo ? '<div class="muted small" style="margin-top:2px">읽은 제목(열): ' + esc(f.colInfo) + "</div>" : "");
     if (f.error){ h += '<p class="err" style="text-align:left">' + esc(f.error) + "</p></div>"; return; }
     f.groups.forEach((g, gi) => {
       const ex = S.rows.find(r => r.partner === g.partner && r.settle_date === g.settleDate);
@@ -1700,7 +1733,7 @@ async function handleFiles(files){
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null });
-      entry.groups = extractFromRows(rows, file.name, CONFIG.NAME_MASK, S.subServerOK && can.manage()).map(g => Object.assign(g, { overwrite: false, webMissing: FEAT.webmiss && !!S.wmDefault }));
+      const ext = extractFromRows(rows, file.name, CONFIG.NAME_MASK, S.subServerOK && can.manage()); entry.colInfo = ext.colInfo; entry.groups = ext.map(g => Object.assign(g, { overwrite: false, webMissing: FEAT.webmiss && !!S.wmDefault }));
     } catch (e) { entry.error = e.message; }
     S.staged.push(entry);
   }
