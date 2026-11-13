@@ -647,30 +647,39 @@ const HDR_SYN = {
 const HDR_REQUIRED = ["kind", "partner", "amt", "settle", "cust"];
 const HDR_LABEL = { no: "번호(No)", kind: "정산종류", cust: "고객명", svc: "가입서비스", prod: "상품명", opt: "상품옵션", partner: "인수처(업체)", open: "개통일", amt: "정산금액", settle: "정산예정일", note: "정산 비고" };
 const hdrNorm = v => String(v == null ? "" : v).normalize("NFKC").toLowerCase().replace(/[\s\u00a0\u200b*·・:：()（）\[\]{}<>\-_./,]/g, "");
-/* 위에서부터 20줄 안에서 제목 줄을 찾아 열 위치를 돌려줘요. 못 찾으면 어떤 제목이 없는지 알려 줘요 */
-function resolveCols(rows){
-  let best = null;
-  for (let i = 0; i < Math.min(rows.length, 20); i++){
-    const r = rows[i] || [], map = {}, used = new Set();
-    r.forEach((cell, ci) => { const t = hdrNorm(cell); if (t) { map[ci] = t; } });
-    const cols = {};
-    Object.keys(HDR_SYN).forEach(f => {
-      const syn = HDR_SYN[f].map(hdrNorm);
-      let hit = -1;
-      for (const [ci, t] of Object.entries(map)) { if (!used.has(+ci) && syn.includes(t)) { hit = +ci; break; } }       // 이름이 정확히 같은 열 먼저
-      if (hit < 0) for (const [ci, t] of Object.entries(map)) { if (used.has(+ci)) continue; if (syn.some(s => s.length >= 3 && t.includes(s) && !(f === "amt" && /약정|합계|누계|잔액/.test(t)))) { hit = +ci; break; } }   // '정산금액(원)' 처럼 덧붙은 글자 허용
-      if (hit >= 0){ cols[f] = hit; used.add(hit); }
-    });
-    const score = Object.keys(cols).length + HDR_REQUIRED.filter(f => cols[f] != null).length * 2;
-    if (!best || score > best.score) best = { row: i, cols, score, titles: r.map(x => String(x == null ? "" : x).trim()).filter(Boolean) };
-  }
-  if (!best || HDR_REQUIRED.some(f => best.cols[f] == null)){
+/* 한 줄을 제목 줄로 보고 열 위치를 찾습니다 (이름이 정확히 같은 열 먼저, 그다음 '정산금액(원)' 처럼 덧붙은 글자 허용) */
+function mapHeader(r){
+  const map = {}; let n = 0;
+  (r || []).forEach((cell, ci) => { const t = hdrNorm(cell); if (t){ map[ci] = t; n++; } });
+  if (n < 4) return {};
+  const cols = {}, used = new Set();
+  Object.keys(HDR_SYN).forEach(f => {
+    const syn = HDR_SYN[f].map(hdrNorm);
+    let hit = -1;
+    for (const [ci, t] of Object.entries(map)) { if (!used.has(+ci) && syn.includes(t)) { hit = +ci; break; } }
+    if (hit < 0) for (const [ci, t] of Object.entries(map)) { if (used.has(+ci)) continue; if (syn.some(s => s.length >= 3 && t.includes(s) && !(f === "amt" && /약정|합계|누계|잔액/.test(t)))) { hit = +ci; break; } }
+    if (hit >= 0){ cols[f] = hit; used.add(hit); }
+  });
+  return cols;
+}
+const colsSig = c => Object.keys(c).sort().map(k => k + c[k]).join(",");
+/* 시트 전체에서 제목 줄을 모두 찾습니다. 한 시트에 표가 여러 개 쌓여 있고 표마다 열 배치가 달라도, 각 행은 바로 위의 제목 줄 기준으로 읽어요 */
+function resolveBlocks(rows){
+  const blocks = [];
+  for (let i = 0; i < Math.min(rows.length, 5000); i++){ const c = mapHeader(rows[i]); if (HDR_REQUIRED.every(f => c[f] != null)) blocks.push({ row: i, cols: c }); }
+  if (!blocks.length){
+    let best = null;
+    for (let i = 0; i < Math.min(rows.length, 20); i++){ const c = mapHeader(rows[i]), score = Object.keys(c).length + HDR_REQUIRED.filter(f => c[f] != null).length * 2; if (!best || score > best.score) best = { row: i, cols: c, score, titles: (rows[i] || []).map(x => String(x == null ? "" : x).trim()).filter(Boolean) }; }
     const miss = HDR_REQUIRED.filter(f => !best || best.cols[f] == null).map(f => HDR_LABEL[f]);
     const seen = (best && best.titles.length ? best.titles : (rows[0] || []).map(x => String(x == null ? "" : x).trim()).filter(Boolean)).slice(0, 24).join(" · ");
     throw new Error("정산내역서 제목 줄을 찾지 못했습니다. 없는 제목: " + miss.join(", ") + (seen ? " / 파일에서 읽은 제목: " + seen : ""));
   }
-  return { cols: best.cols, headerRow: best.row, info: Object.keys(best.cols).map(f => (HDR_LABEL[f] || f) + "=" + colLetter(best.cols[f])).join(" · ") };
+  const rowCols = new Array(rows.length).fill(null), headerAt = new Set(), sigs = new Set();
+  blocks.forEach((b, bi) => { const end = bi + 1 < blocks.length ? blocks[bi + 1].row : rows.length; headerAt.add(b.row); sigs.add(colsSig(b.cols)); for (let i = b.row + 1; i < end; i++) rowCols[i] = b.cols; });
+  const first = blocks[0].cols, one = Object.keys(first).map(f => (HDR_LABEL[f] || f) + "=" + colLetter(first[f])).join(" · ");
+  return { rowCols, headerAt, blocks, layouts: sigs.size, headerRow: blocks[0].row, info: one + (blocks.length > 1 ? " · 제목 줄 " + blocks.length + "개" + (sigs.size > 1 ? "(열 배치 " + sigs.size + "가지 — 줄마다 해당 제목 기준으로 읽었어요)" : "") : "") };
 }
+function resolveCols(rows){ const R = resolveBlocks(rows); return { cols: R.blocks[0].cols, headerRow: R.headerRow, info: R.info }; }
 function colLetter(i){ let s = "", n = i + 1; while (n > 0){ const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
 function pad2(n){ return String(n).padStart(2, "0"); }
 function toISO(v){
@@ -707,72 +716,91 @@ function cleanNote(n){ return String(n == null ? "" : n).replace(/0\d{1,2}[-\s]?
 function parseNote(note, settleISO){
   const t = String(note == null ? "" : note);
   const y0 = settleISO ? +settleISO.slice(0, 4) : new Date().getFullYear();
-  const validDate = (yy, mm, dd) => {
-    const y = 2000 + yy;
+  const valid = (y, mm, dd) => {
     if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return "";
     const d = new Date(Date.UTC(y, mm - 1, dd));
     if (d.getUTCMonth() !== mm - 1) return "";
     if (y > y0 + 1 || y < y0 - 3) return "";
     return y + "-" + pad2(mm) + "-" + pad2(dd);
   };
-  let term = "", rate = null;
-  const m = t.match(/(?:^|\D)(\d{2})(\d{2})(\d{2})(?!\d)\s*해지/);
-  if (m) term = validDate(+m[1], +m[2], +m[3]);
-  if (!term){
-    const re = /(?:^|\D)(\d{2})(\d{2})(\d{2})(?!\d)/g; let k;
-    while ((k = re.exec(t))){ const v = validDate(+k[1], +k[2], +k[3]); if (v){ term = v; break; } }
+  /* 날짜 후보를 모두 모으고, '해지' 글자에 가장 가까운 것을 해지일로 봅니다 (2026-03-01 · 26.3.1 · 260301 · 20260301 · 2026년 3월 1일) */
+  const cands = []; let m, re;
+  const add = (pos, len, date) => { if (date) cands.push({ pos, end: pos + len, date }); };
+  re = /(^|\D)(20\d{2})\s*[-./년]\s*(\d{1,2})\s*[-./월]\s*(\d{1,2})\s*일?(?!\d)/g;
+  while ((m = re.exec(t))) add(m.index + m[1].length, m[0].length - m[1].length, valid(+m[2], +m[3], +m[4]));
+  re = /(^|\D)(\d{2})\s*[-./]\s*(\d{1,2})\s*[-./]\s*(\d{1,2})(?!\d)/g;
+  while ((m = re.exec(t))) add(m.index + m[1].length, m[0].length - m[1].length, valid(2000 + +m[2], +m[3], +m[4]));
+  re = /(^|\D)(20\d{2})(\d{2})(\d{2})(?!\d)/g;
+  while ((m = re.exec(t))) add(m.index + m[1].length, m[0].length - m[1].length, valid(+m[2], +m[3], +m[4]));
+  re = /(^|\D)(\d{2})(\d{2})(\d{2})(?!\d)/g;
+  while ((m = re.exec(t))) add(m.index + m[1].length, m[0].length - m[1].length, valid(2000 + +m[2], +m[3], +m[4]));
+  let term = "";
+  if (cands.length){
+    const hz = []; re = /해지/g; while ((m = re.exec(t))) hz.push(m.index);
+    if (hz.length){ let best = null; cands.forEach(c => { const d = Math.min.apply(null, hz.map(h => h >= c.end ? h - c.end : (c.pos >= h + 2 ? c.pos - (h + 2) + 3 : 99))); if (d <= 17 && (!best || d < best.d || (d === best.d && c.pos < best.pos))) best = { d, date: c.date, pos: c.pos }; }); if (best) term = best.date; }
+    if (!term) term = cands.slice().sort((a, b) => a.pos - b.pos)[0].date;
   }
-  const r = t.match(/(\d{1,3}(?:\.\d+)?)\s*%/);
-  if (r){ const x = parseFloat(r[1]); if (x >= 0 && x <= 100) rate = x; }
-  return { term, rate };
+  let rate = null;
+  const r1 = t.match(/(\d{1,3}(?:\.\d+)?)\s*(?:%|％|퍼센트|퍼|프로)/) || t.match(/환수율\s*[:=]?\s*(\d{1,3}(?:\.\d+)?)/);
+  if (r1){ const x = parseFloat(r1[1]); if (x >= 0 && x <= 100) rate = x; }
+  /* 해지가 아닌 사유(VOC·요금조정·허위·소명불수용·차액환수 등)는 해지일·환수율이 없는 게 정상이에요 */
+  const other = !term && rate == null && !/해지/.test(t) && /(VOC|민원|허위|소명|요금조정|요금\s*불만|불수용|미처리|패널티|차액|갭|기한|유심|반품|위약금|미지급|하향|상향|기변|명변|재녹취|사칭)/i.test(t);
+  const rateNA = rate == null && /(차액|갭|허위|소명|VOC|민원|요금조정|기변|하향|상향|명변|미납|본사환수|지로차감)/i.test(t);
+  return { term, rate, other, rateNA };
 }
 /* 정산내역서(엑셀)에서 읽은 행 -> 정산서별 요약 + 환수 건. 고객명은 가리고, 가입서비스(회선·가입번호) 열은 기본적으로 읽지 않음
    (서버 보관 방식(SUB_MODE=server)에서 관리자가 withSub=true 로 올릴 때만 sub_no 로 읽어 '보관함'에 따로 저장) */
-function extractFromRows(rows, fileName, maskStyle, withSub){
-  const RC = resolveCols(rows), COL = Object.assign({}, RC.cols); const COL_SVC = COL.svc == null ? -1 : COL.svc;
-  const tm = String(fileName || "").match(/(정발행|역발행|원천세)/);
-  const fileTax = tm ? tm[1] : "";
-  const groups = new Map(); const skipped = []; const excl = new Map();
-  for (const r of rows){
-    if (!r) continue;
-    const kind = String(r[COL.kind] == null ? "" : r[COL.kind]).trim();
+function detectTax(fileName, sheetName){
+  const pick = s => { const m = String(s || "").match(/(정발행|역발행|원천세)/); if (m) return m[1]; if (/(^|[^가-힣])역([^가-힣]|$)/.test(String(s || ""))) return "역발행"; return ""; };
+  const a = pick(fileName); if (a) return { tax: a, from: "파일 이름" };
+  const b = pick(sheetName); if (b) return { tax: b, from: "시트 이름" };
+  return { tax: "", from: "" };
+}
+/* 휴면 업체: 업체 이름에 (휴) · （휴） · [휴] · (휴면) 표시가 있으면 정산 대상이 아니라서 읽지 않아요 */
+const isDormant = v => /[(（\[]\s*휴(?:면)?\s*[)）\]]/.test(String(v == null ? "" : v));
+function extractFromRows(rows, fileName, maskStyle, withSub, sheetName){
+  const RC = resolveBlocks(rows);
+  const dt = detectTax(fileName, sheetName), fileTax = dt.tax;
+  const groups = new Map(); const skipped = []; const excl = new Map(); const dormant = new Map(); let cand = 0, numericSkip = 0, firstNumeric = "";
+  for (let ri = 0; ri < rows.length; ri++){
+    const r = rows[ri], C = RC.rowCols[ri];
+    if (!r || !C) continue;
+    const kind = String(r[C.kind] == null ? "" : r[C.kind]).trim();
     if (kind !== "일반" && kind !== "환수"){
-      if (kind){ const pe = stripMarks(r[COL.partner]), se = toISO(r[COL.settle]), ae = r[COL.amt] == null || r[COL.amt] === "" ? NaN : Number(r[COL.amt]);
+      if (kind){ const pe = stripMarks(r[C.partner]), se = toISO(r[C.settle]), ae = r[C.amt] == null || r[C.amt] === "" ? NaN : Number(r[C.amt]);
         if (pe && se && isFinite(ae)){ const ek = pe + "|" + se; if (!excl.has(ek)) excl.set(ek, {}); const eo = excl.get(ek); if (!eo[kind]) eo[kind] = { count: 0, sum: 0 }; eo[kind].count++; eo[kind].sum += ae; } }
       continue;
     }
-    const partner = stripMarks(r[COL.partner]);
-    const settle = toISO(r[COL.settle]);
-    const amt = r[COL.amt] == null || r[COL.amt] === "" ? 0 : Number(r[COL.amt]);
-    if (!partner || !settle || !isFinite(amt)){ skipped.push("번호 " + (r[COL.no] == null ? "?" : r[COL.no]) + ": 업체·정산예정일·정산금액 중 빈 값이 있어 제외했습니다."); continue; }
+    if (isDormant(r[C.partner])){ const nm = stripMarks(r[C.partner]), d = dormant.get(nm) || { name: nm, claw: 0, normal: 0, sum: 0 }, a = Number(r[C.amt]); if (kind === "환수") d.claw++; else d.normal++; if (isFinite(a)) d.sum += a; dormant.set(nm, d); continue; }
+    cand++;
+    const partner = stripMarks(r[C.partner]);
+    if (partner && /^[\d.,:\s-]+$/.test(partner)){ numericSkip++; if (!firstNumeric) firstNumeric = partner; skipped.push({ p: "", m: "번호 " + (r[C.no] == null ? "?" : r[C.no]) + ": 업체 칸에 숫자('" + partner + "')가 있어 제외했습니다. (이 줄의 열 배치가 제목 줄과 다를 수 있어요)" }); continue; }
+    const settle = toISO(r[C.settle]);
+    const amt = r[C.amt] == null || r[C.amt] === "" ? 0 : Number(r[C.amt]);
+    if (!partner || !settle || !isFinite(amt)){ skipped.push({ p: partner, m: "번호 " + (r[C.no] == null ? "?" : r[C.no]) + ": 업체·정산예정일·정산금액 중 빈 값이 있어 제외했습니다." }); continue; }
     const key = partner + "|" + settle;
-    if (!groups.has(key)) groups.set(key, { partner, settleDate: settle, taxType: fileTax, normalSum: 0, normalCount: 0, clawSum: 0, lines: [], normalLines: [], excluded: [], warnings: [] });
+    if (!groups.has(key)) groups.set(key, { partner, settleDate: settle, taxType: fileTax, taxFrom: fileTax ? dt.from : "", normalSum: 0, normalCount: 0, clawSum: 0, lines: [], normalLines: [], excluded: [], warnings: [] });
     const g = groups.get(key);
+    const prod = [r[C.prod], r[C.opt]].filter(x => x != null && String(x).trim() !== "").map(x => String(x).trim()).join(" / ");
     if (kind === "일반"){
       g.normalSum += amt; g.normalCount++;
-      g.normalLines.push({ src_no: Number(r[COL.no]) || null, customer_mask: maskName(r[COL.cust], maskStyle),
-        product: [r[COL.prod], r[COL.opt]].filter(x => x != null && String(x).trim() !== "").map(x => String(x).trim()).join(" / "),
-        open_date: toISO(r[COL.open]), amount: amt, note: cleanNote(r[COL.note]) });
+      g.normalLines.push({ src_no: Number(r[C.no]) || null, customer_mask: maskName(r[C.cust], maskStyle), product: prod, open_date: toISO(r[C.open]), amount: amt, note: cleanNote(r[C.note]) });
       continue;
     }
-    if (amt > 0) g.warnings.push("번호 " + r[COL.no] + ": 환수 건인데 정산금액이 양수입니다. 확인해 주세요.");
-    const note = cleanNote(r[COL.note]);
+    if (amt > 0) g.warnings.push("번호 " + r[C.no] + ": 환수 건인데 정산금액이 양수입니다. 확인해 주세요.");
+    const note = cleanNote(r[C.note]);
     const pn = parseNote(note, settle);
-    if (!pn.term) g.warnings.push("번호 " + r[COL.no] + ": 비고에서 해지일을 찾지 못했습니다. 아래에서 직접 입력하세요.");
-    if (pn.rate == null) g.warnings.push("번호 " + r[COL.no] + ": 비고에서 환수율을 찾지 못했습니다. 아래에서 직접 입력하세요.");
+    if (!pn.term && !pn.other) g.warnings.push("번호 " + r[C.no] + ": 비고에서 해지일을 찾지 못했습니다. 아래에서 직접 입력하세요.");
+    if (pn.rate == null && !pn.other && !pn.rateNA) g.warnings.push("번호 " + r[C.no] + ": 비고에서 환수율을 찾지 못했습니다. 아래에서 직접 입력하세요.");
     g.clawSum += -amt;
-    g.lines.push(Object.assign({
-      src_no: Number(r[COL.no]) || null,
-      customer_mask: maskName(r[COL.cust], maskStyle),
-      product: [r[COL.prod], r[COL.opt]].filter(x => x != null && String(x).trim() !== "").map(x => String(x).trim()).join(" / "),
-      open_date: toISO(r[COL.open]),
-      term_date: pn.term, rate_pct: pn.rate, amount: -amt, note
-    }, withSub ? { sub_no: String(r[COL_SVC] == null ? "" : r[COL_SVC]).trim().slice(0, 300) } : {}));
+    g.lines.push(Object.assign({ src_no: Number(r[C.no]) || null, customer_mask: maskName(r[C.cust], maskStyle), product: prod, open_date: toISO(r[C.open]), term_date: pn.term, rate_pct: pn.rate, amount: -amt, note }, withSub ? { sub_no: String(C.svc == null || r[C.svc] == null ? "" : r[C.svc]).trim().slice(0, 300) } : {}));
   }
+  if (numericSkip > 0 && numericSkip >= cand * 0.5) throw new Error("업체(인수처) 칸을 잘못 읽은 것 같아요. 업체 이름 자리에 숫자 '" + firstNumeric + "'(엑셀 날짜·시간 숫자일 수 있어요)가 읽혔어요. 읽은 제목(열): " + RC.info + " → 파일의 제목 줄에서 '인수처' 제목이 어느 열인지 확인해 주세요.");
   const list = Array.from(groups.values());
-  if (!list.length) throw new Error("'일반' 또는 '환수' 행을 찾지 못했습니다.");
-  list.forEach(g => { g.warnings = skipped.concat(g.warnings); const eo = excl.get(g.partner + "|" + g.settleDate) || {}; g.excluded = Object.keys(eo).map(k => ({ kind: k, count: eo[k].count, sum: eo[k].sum })); });
-  list.colInfo = RC.info; list.headerRow = RC.headerRow;
+  if (!list.length) throw new Error(dormant.size ? "휴면(휴) 표시가 된 업체의 줄만 있어서 등록할 정산 건이 없어요. (휴면 업체는 읽지 않아요: " + Array.from(dormant.keys()).join(", ") + ")" : "'일반' 또는 '환수' 행을 찾지 못했습니다.");
+  skipped.forEach(s => { const g = list.find(x => x.partner === s.p) || list[0]; g.warnings.unshift(s.m); });
+  list.forEach(g => { const eo = excl.get(g.partner + "|" + g.settleDate) || {}; g.excluded = Object.keys(eo).map(k => ({ kind: k, count: eo[k].count, sum: eo[k].sum })); });
+  list.colInfo = RC.info; list.headerRow = RC.headerRow; list.blocks = RC.blocks.length; list.layouts = RC.layouts; list.dormant = Array.from(dormant.values());
   return list;
 }
 function daysBetween(fromISO, toISOv){
@@ -849,15 +877,15 @@ function justCompleted(before, after){ return !!before && !!after && before.unre
    (정산서 등록 때 쓰는 extractFromRows 는 이 열을 읽지 않습니다) */
 /* (가입서비스 열은 제목으로 찾습니다) */
 function extractSubNos(rows, fileName, maskStyle){
-  const RC = resolveCols(rows), COL = Object.assign({}, RC.cols); const COL_SVC = COL.svc == null ? -1 : COL.svc;
-  const groups = new Map();
-  for (const r of rows){
-    if (!r || String(r[COL.kind] == null ? "" : r[COL.kind]).trim() !== "환수") continue;
-    const partner = stripMarks(r[COL.partner]), settle = toISO(r[COL.settle]), amt = r[COL.amt] == null || r[COL.amt] === "" ? NaN : Number(r[COL.amt]);
-    if (!partner || !settle || !isFinite(amt)) continue;
+  const RC = resolveBlocks(rows), groups = new Map();
+  for (let ri = 0; ri < rows.length; ri++){
+    const r = rows[ri], C = RC.rowCols[ri];
+    if (!r || !C || String(r[C.kind] == null ? "" : r[C.kind]).trim() !== "환수" || isDormant(r[C.partner])) continue;
+    const partner = stripMarks(r[C.partner]), settle = toISO(r[C.settle]), amt = r[C.amt] == null || r[C.amt] === "" ? NaN : Number(r[C.amt]);
+    if (!partner || /^[\d.,:\s-]+$/.test(partner) || !settle || !isFinite(amt)) continue;
     const key = partner + "|" + settle;
     if (!groups.has(key)) groups.set(key, { partner, settleDate: settle, items: [] });
-    groups.get(key).items.push({ src_no: Number(r[COL.no]) || null, mask: maskName(r[COL.cust], maskStyle), amount: -amt, sub: String(r[COL_SVC] == null ? "" : r[COL_SVC]).trim() });
+    groups.get(key).items.push({ src_no: Number(r[C.no]) || null, mask: maskName(r[C.cust], maskStyle), amount: -amt, sub: String(C.svc == null || r[C.svc] == null ? "" : r[C.svc]).trim() });
   }
   return Array.from(groups.values());
 }
@@ -1700,12 +1728,12 @@ function vUpload(){
     '<div class="drop" id="drop">정산내역서 엑셀 파일(.xlsx)을 여기에 끌어다 놓거나 눌러서 선택하세요<br><span class="muted small">여러 파일을 한 번에 올릴 수 있어요</span><input type="file" id="file" multiple accept=".xlsx,.xls" style="display:none"></div>' +
     (S.subServerOK && can.manage() ? '<label class="keepsub"><input type="checkbox" id="keepsub"' + (S.keepSub ? " checked" : "") + '> <span><b>가입번호도 함께 보관하기</b><br><span class="muted small">서버의 보관함에 따로 저장돼요. 화면에는 표시하지 않고, 관리자만 업체조회의 엑셀로 꺼낼 수 있어요. 가져올 때마다 조회 기록이 남아요.</span></span></label>' : "") + wmOptionHtml();
   S.staged.forEach((f, fi) => {
-    h += '<div class="card form"><b>' + esc(f.name) + "</b>" + (f.colInfo ? '<div class="muted small" style="margin-top:2px">읽은 제목(열): ' + esc(f.colInfo) + "</div>" : "");
+    h += '<div class="card form"><b>' + esc(f.name) + "</b>" + (f.colInfo ? '<div class="muted small" style="margin-top:2px">읽은 제목(열): ' + esc(f.colInfo) + "</div>" : "") + ((f.dormant || []).length ? '<div class="muted small" style="margin-top:2px">휴면(휴) 업체는 읽지 않았어요: ' + f.dormant.map(d => esc(d.name) + " (환수 " + d.claw + "건" + (d.normal ? " · 일반 " + d.normal + "건" : "") + ")").join(", ") + "</div>" : "");
     if (f.error){ h += '<p class="err" style="text-align:left">' + esc(f.error) + "</p></div>"; return; }
     f.groups.forEach((g, gi) => {
       const ex = S.rows.find(r => r.partner === g.partner && r.settle_date === g.settleDate);
       const carry = Math.max(0, g.clawSum - g.normalSum);
-      h += '<div style="border-top:1px solid #EEF0F3;margin-top:12px;padding-top:12px"><div class="row"><b style="font-size:16px">' + esc(g.partner) + '</b><span class="muted">' + g.settleDate + ' 정산</span><label class="muted">세무유형</label><select data-g="tax" data-fi="' + fi + '" data-gi="' + gi + '"><option value="">선택</option>' + CONFIG.TAX_TYPES.map(t => "<option" + (g.taxType === t ? " selected" : "") + ">" + t + "</option>").join("") + "</select>" + wmGroupHtml(fi, gi, g) + "</div>" +
+      h += '<div style="border-top:1px solid #EEF0F3;margin-top:12px;padding-top:12px"><div class="row"><b style="font-size:16px">' + esc(g.partner) + '</b><span class="muted">' + g.settleDate + ' 정산</span><label class="muted">세무유형</label><select data-g="tax" data-fi="' + fi + '" data-gi="' + gi + '"><option value="">선택</option>' + CONFIG.TAX_TYPES.map(t => "<option" + (g.taxType === t ? " selected" : "") + ">" + t + "</option>").join("") + "</select>" + (g.taxFrom ? '<span class="muted small">자동 선택: ' + esc(g.taxFrom) + "</span>" : "") + wmGroupHtml(fi, gi, g) + "</div>" +
         '<div class="row" style="gap:20px;margin:8px 0"><span>일반 ' + g.normalCount + "건 합계 <b>" + won(g.normalSum) + "</b></span><span>환수 " + g.lines.length + '건 합계 <b class="red">' + won(g.clawSum) + "</b></span><span>상계 후 총합계 <b>" + won(carry) + "</b></span>" + (S.subServerOK && can.manage() ? '<span class="muted">가입번호 ' + g.lines.filter(l => l.sub_no).length + "건 읽음 · " + (S.keepSub ? "보관 예정" : "보관 안 함") + "</span>" : "") + "</div>" + normalNote(g);
       if (ex) h += '<div class="row"><span class="badge b-amber">이미 등록된 정산서</span><label class="muted small"><input type="checkbox" data-g="ow" data-fi="' + fi + '" data-gi="' + gi + '"' + (g.overwrite ? " checked" : "") + "> 덮어쓰기 (처리기록·세금계산서 상태는 유지돼요)</label></div>";
       if (!g.lines.length){ h += '<p class="muted small">환수 건이 없는 정산서라 저장하지 않아요.</p></div>'; return; }
@@ -1733,7 +1761,8 @@ async function handleFiles(files){
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null });
-      const ext = extractFromRows(rows, file.name, CONFIG.NAME_MASK, S.subServerOK && can.manage()); entry.colInfo = ext.colInfo; entry.groups = ext.map(g => Object.assign(g, { overwrite: false, webMissing: FEAT.webmiss && !!S.wmDefault }));
+      const ext = extractFromRows(rows, file.name, CONFIG.NAME_MASK, S.subServerOK && can.manage(), wb.SheetNames[0]); entry.colInfo = ext.colInfo; entry.dormant = ext.dormant || [];
+      ext.forEach(g => { if (!g.taxType){ const prev = S.rows.filter(r => r.partner === g.partner && r.tax_type).sort((a, b) => a.settle_date < b.settle_date ? 1 : -1)[0]; if (prev){ g.taxType = prev.tax_type; g.taxFrom = "이미 등록된 업체"; } } }); entry.groups = ext.map(g => Object.assign(g, { overwrite: false, webMissing: FEAT.webmiss && !!S.wmDefault }));
     } catch (e) { entry.error = e.message; }
     S.staged.push(entry);
   }
@@ -1744,6 +1773,7 @@ async function saveStaged(){
   for (const f of S.staged) for (const g of (f.groups || [])) if (g.lines.length) todo.push(g);
   for (const g of todo){
     if (!g.taxType){ toast(g.partner + ": 세무유형을 선택하세요.", true); return; }
+    if (g.clawSum < 0 || g.lines.some(l => l.amount < 0)){ toast(g.partner + ": 환수 금액이 음수(−)로 읽혔어요. 정산금액 칸을 잘못 읽었을 수 있어요. 파일 이름 아래 '읽은 제목(열)'을 확인하세요. (저장하지 않았어요)", true); return; }
     const ex = S.rows.find(r => r.partner === g.partner && r.settle_date === g.settleDate);
     if (ex && !g.overwrite){ toast(g.partner + " " + g.settleDate + ": 이미 등록되어 있어요. '덮어쓰기'를 체크하거나 취소하세요.", true); return; }
   }
@@ -1983,7 +2013,7 @@ document.addEventListener("click", async e => {
     else if (a === "celeclose"){ closeCelebrate(); }
     else if (a === "delaction"){ if (!confirm("이 처리 기록을 삭제할까요? 삭제하면 되돌릴 수 없어요.")) return; await API.deleteAction(Number(el.dataset.id)); await reload(); renderTab(); toast("삭제했어요."); }
     else if (a === "delstmt"){ if (!confirm("이 정산서(환수 건 포함)를 삭제할까요? 되돌릴 수 없어요.")) return; await API.deleteStatement(Number(el.dataset.id)); await reload(); S.sel.date = ""; renderTab(); toast("정산서를 삭제했어요."); }
-    else if (a === "savestaged"){ el.disabled = true; await saveStaged(); }
+    else if (a === "savestaged"){ el.disabled = true; try { await saveStaged(); } finally { el.disabled = false; } }
     else if (a === "clearstaged"){ S.staged = []; renderTab(); }
     else if (a === "export") exportXlsx();
     else if (a === "genpw"){ $("#mp").value = genPassword(); }
