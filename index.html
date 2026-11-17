@@ -801,6 +801,8 @@ function readSummary(rows, b, RC, bi){
 /* 휴면 업체: 업체 이름에 (휴) · （휴） · [휴] · (휴면) 표시가 있으면 정산 대상이 아니라서 읽지 않아요 */
 /* 유치자(지점): '상일점_옆커폰' 처럼 업체 이름이 뒤에 붙어 있으면 떼고 '상일점'으로 */
 const cleanAgent = (v, partner) => { let s = String(v == null ? "" : v).replace(/\s+/g, " ").trim(); if (!s) return ""; const p = String(partner || "").trim(); if (p){ const e = s.replace(/^(\(\S\)\s*)/, ""); if (e.length > p.length + 1 && (e.endsWith("_" + p) || e.endsWith("-" + p) || e.endsWith(" " + p))) s = s.slice(0, s.length - p.length - 1).trim(); } return s.slice(0, 60); };
+const agentLabel = (l, p) => (l && l.agent) ? (cleanAgent(l.agent, p) || String(l.agent)) : "";
+const agentIsBranch = (l, p) => { const raw = String((l && l.agent) || "").replace(/^(\(\S\)\s*)/, ""), q = String(p || ""); return !!q && raw.length > q.length + 1 && (raw.endsWith("_" + q) || raw.endsWith("-" + q) || raw.endsWith(" " + q)); };
 const isDormant = v => /[(（\[]\s*휴(?:면)?\s*[)）\]]/.test(String(v == null ? "" : v));
 const toNum = v => typeof v === "number" ? v : (v == null || String(v).trim() === "" ? NaN : Number(String(v).replace(/[,\s원]/g, "")));
 function extractFromRows(rows, fileName, maskStyle, withSub, sheetName){
@@ -826,7 +828,7 @@ function extractFromRows(rows, fileName, maskStyle, withSub, sheetName){
     if (!groups.has(key)) groups.set(key, { partner, settleDate: settle, taxType: fileTax, taxFrom: fileTax ? dt.from : "", normalSum: 0, normalCount: 0, clawSum: 0, lines: [], normalLines: [], excluded: [], warnings: [] });
     const g = groups.get(key); if (!g.blk) g.blk = new Set(); g.blk.add(bi); binfo[bi].groups.add(key);
     const prod = [r[C.prod], r[C.opt]].filter(x => x != null && String(x).trim() !== "").map(x => String(x).trim()).join(" / ");
-    const note = cleanNote(r[C.note]), agent = C.agent == null ? "" : cleanAgent(r[C.agent], partner);
+    const note = cleanNote(r[C.note]), agent = C.agent == null ? "" : String(r[C.agent] == null ? "" : r[C.agent]).replace(/\s+/g, " ").trim().slice(0, 60);
     if (amt > 0){   /* 양수 = 일반 정산 */
       g.normalSum += amt; g.normalCount++;
       if (kind === "환수") g.warnings.push("번호 " + (r[C.no] == null ? "?" : r[C.no]) + ": 정산종류는 '환수'인데 정산금액이 양수(+)예요. 일반 정산으로 읽었어요. 확인해 주세요.");
@@ -1730,8 +1732,8 @@ function vView(){
     (FEAT.cal ? calHtml(cur.partner, cur.settle_date) : "") + '<div class="sec">선택한 주차 상세 · ' + mmdd(cur.settle_date) + " 정산</div>" +
     flowHtml + partnerSummaryHtml(mine) + weekCardsHtml(mine, cur) + dunStrip(cur.partner) + costStrip(cur.partner) +
     '<div class="banner">' + esc(cur.partner) + " (" + esc(cur.tax_type) + ") · " + cur.settle_date + " 정산 " + wmBadge(cur) + " · 상태: " + badge(cur.status) + " · 정산서 합계(세금 반영) " + won(taxTotal(cur)) + "</div>" + wmCtl(cur) +
-    '<div class="sec k-claw">① 이번 정산 환수 건</div><div class="card tw"><table style="min-width:860px"><thead><tr><th class="l">고객</th>' + (S.phoneOK ? "<th>명의자 연락처</th>" : "") + '<th class="l">상품</th><th>개통일</th><th>해지일</th><th>환수율</th><th class="n">환수금액</th><th class="l">정산 비고</th></tr></thead><tbody>' +
-    (cur.lines.length ? cur.lines.map(l => '<tr><td class="l"><b>' + esc(l.customer_mask) + '</b></td>' + (S.phoneOK ? '<td class="muted">' + esc(l.phone_mask || "-") + "</td>" : "") + '<td class="l">' + esc(l.product) + "</td><td>" + esc(l.open_date || "") + "</td><td>" + (l.term_date ? esc(l.term_date) : '<span class="warn">비고확인</span>') + "</td><td>" + (l.rate_pct == null ? '<span class="warn">비고확인</span>' : l.rate_pct + "%") + '</td><td class="n"><b class="red">' + fmt(l.amount) + '</b></td><td class="l small muted">' + esc(l.note) + "</td></tr>").join("") : '<tr><td colspan="7" class="empty">환수 건이 없어요.</td></tr>') +
+    '<div class="sec k-claw">① 이번 정산 환수 건</div><div class="card tw"><table style="min-width:860px"><thead><tr><th class="l">고객</th>' + (cur.lines.some(l => l.agent) ? '<th class="l">유치자</th>' : "") + (S.phoneOK ? "<th>명의자 연락처</th>" : "") + '<th class="l">상품</th><th>개통일</th><th>해지일</th><th>환수율</th><th class="n">환수금액</th><th class="l">정산 비고</th></tr></thead><tbody>' +
+    (cur.lines.length ? cur.lines.map(l => '<tr><td class="l"><b>' + esc(l.customer_mask) + '</b></td>' + (cur.lines.some(x => x.agent) ? '<td class="l small">' + esc(agentLabel(l, cur.partner) || "-") + "</td>" : "") + (S.phoneOK ? '<td class="muted">' + esc(l.phone_mask || "-") + "</td>" : "") + '<td class="l">' + esc(l.product) + "</td><td>" + esc(l.open_date || "") + "</td><td>" + (l.term_date ? esc(l.term_date) : '<span class="warn">비고확인</span>') + "</td><td>" + (l.rate_pct == null ? '<span class="warn">비고확인</span>' : l.rate_pct + "%") + '</td><td class="n"><b class="red">' + fmt(l.amount) + '</b></td><td class="l small muted">' + esc(l.note) + "</td></tr>").join("") : '<tr><td colspan="7" class="empty">환수 건이 없어요.</td></tr>') +
     '<tr class="tot"><td colspan="' + (S.phoneOK ? 6 : 5) + '" style="text-align:right">환수금 합계</td><td class="n">' + fmt(cur.lines.reduce((t, l) => t + Number(l.amount), 0)) + "</td><td></td></tr></tbody></table></div>" +
     normalHtml + '<div class="sec">③ 차감·입금 처리 기록</div>' + actionsTable(acts, false) + planSection(cur.partner, cur) +
     (can.action() ? '<div class="card form"><b>처리 기록 추가</b> <span class="muted small">· ' + S.sel.date + " 정산 · 남은 금액 " + won(cur.unresolved) + '</span><div class="grid-f" style="margin-top:12px">' +
@@ -1822,7 +1824,7 @@ function vUpload(){
     '<div class="drop" id="drop">정산내역서 엑셀 파일(.xlsx)을 여기에 끌어다 놓거나 눌러서 선택하세요<br><span class="muted small">여러 파일을 한 번에 올릴 수 있어요</span><input type="file" id="file" multiple accept=".xlsx,.xls" style="display:none"></div>' +
     (S.subServerOK && can.manage() ? '<label class="keepsub"><input type="checkbox" id="keepsub"' + (S.keepSub ? " checked" : "") + '> <span><b>가입번호도 함께 보관하기</b><br><span class="muted small">서버의 보관함에 따로 저장돼요. 화면에는 표시하지 않고, 관리자만 업체조회의 엑셀로 꺼낼 수 있어요. 가져올 때마다 조회 기록이 남아요.</span></span></label>' : "") + wmOptionHtml() + bulkTaxBar(-1);
   S.staged.forEach((f, fi) => {
-    h += '<div class="card form"><b>' + esc(f.name) + "</b>" + (f.colInfo ? '<div class="muted small" style="margin-top:2px">읽은 제목(열): ' + esc(f.colInfo) + "</div>" : "") + (f.groups ? '<div class="muted small" style="margin-top:2px">줄 구분: 정산금액이 <b>음수(−)면 환수, 양수(+)면 일반 정산</b>으로 읽어요. 정산종류가 \'환수\'인데 금액이 +인 줄만 알려 드려요.' + (f.zero ? " · 금액 0원 줄 " + f.zero + "건은 건너뛰었어요" : "") + "</div>" : "") + ((f.dormant || []).length ? '<div class="muted small" style="margin-top:2px">휴면(휴) 업체는 읽지 않았어요: ' + f.dormant.map(d => esc(d.name) + " (환수 " + d.claw + "건" + (d.normal ? " · 일반 " + d.normal + "건" : "") + ")").join(", ") + "</div>" : "");
+    h += '<div class="card form"><b>' + esc(f.name) + "</b>" + (f.colInfo ? '<div class="muted small" style="margin-top:2px">읽은 제목(열): ' + esc(f.colInfo) + "</div>" : "") + (f.groups ? '<div class="muted small" style="margin-top:2px">줄 구분: 정산금액이 <b>음수(−)면 환수, 양수(+)면 일반 정산</b>으로 읽어요. 정산종류가 \'환수\'인데 금액이 +인 줄만 알려 드려요.' + (f.zero ? " · 금액 0원 줄 " + f.zero + "건은 건너뛰었어요" : "") + "</div>" : "") + ((S.mode === "live" && !(S.caps && S.caps.agents) && f.groups && f.groups.some(g => g.lines.some(l => l.agent))) ? '<div class="warn" style="margin-top:6px">⚠ 유치자를 읽었지만 <b>서버 설정 8(08_유치자.sql)</b>을 아직 돌리지 않아서 저장되지 않아요. SQL을 돌린 뒤 이 파일을 다시 올려 주세요.</div>' : "") + ((f.dormant || []).length ? '<div class="muted small" style="margin-top:2px">휴면(휴) 업체는 읽지 않았어요: ' + f.dormant.map(d => esc(d.name) + " (환수 " + d.claw + "건" + (d.normal ? " · 일반 " + d.normal + "건" : "") + ")").join(", ") + "</div>" : "");
     if (f.error){ h += '<p class="err" style="text-align:left">' + esc(f.error) + "</p></div>"; return; }
     h += bulkTaxBar(fi);
     f.groups.forEach((g, gi) => {
@@ -1833,8 +1835,8 @@ function vUpload(){
       if (ex) h += '<div class="row"><span class="badge b-amber">이미 등록된 정산서</span><label class="muted small"><input type="checkbox" data-g="ow" data-fi="' + fi + '" data-gi="' + gi + '"' + (g.overwrite ? " checked" : "") + "> 덮어쓰기 (처리기록·세금계산서 상태는 유지돼요)</label></div>";
       if (!g.lines.length){ h += '<p class="muted small">환수 건이 없는 정산서라 저장하지 않아요.</p></div>'; return; }
       g.warnings.forEach(w => { h += '<div class="warn">⚠ ' + esc(w) + "</div>"; });
-      h += '<div class="tw" style="margin-top:8px"><table style="min-width:760px"><thead><tr><th>번호</th><th class="l">고객</th>' + (S.phoneOK ? "<th>명의자 연락처</th>" : "") + '<th class="l">상품</th><th>개통일</th><th>해지일</th><th>환수율(%)</th><th class="n">환수금액</th></tr></thead><tbody>' +
-        g.lines.map((l, li) => "<tr><td>" + (l.src_no == null ? "" : l.src_no) + '</td><td class="l">' + esc(l.customer_mask) + '</td>' + (S.phoneOK ? '<td><input type="text" data-g="phone" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.phone || "") + '" placeholder="010-0000-0000" style="width:150px;height:36px"></td>' : "") + '<td class="l">' + esc(l.product) + "</td><td>" + esc(l.open_date) + '</td><td><input type="date" data-g="term" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.term_date) + '" style="height:36px"></td><td><input type="number" min="0" max="100" data-g="rate" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + (l.rate_pct == null ? "" : l.rate_pct) + '" style="width:80px;height:36px"></td><td class="n">' + fmt(Math.round(l.amount * pvf(g))) + "</td></tr>").join("") + "</tbody></table></div></div>";
+      h += '<div class="tw" style="margin-top:8px"><table style="min-width:760px"><thead><tr><th>번호</th><th class="l">고객</th>' + (g.lines.some(l => l.agent) ? '<th class="l">유치자</th>' : "") + (S.phoneOK ? "<th>명의자 연락처</th>" : "") + '<th class="l">상품</th><th>개통일</th><th>해지일</th><th>환수율(%)</th><th class="n">환수금액</th></tr></thead><tbody>' +
+        g.lines.map((l, li) => "<tr><td>" + (l.src_no == null ? "" : l.src_no) + '</td><td class="l">' + esc(l.customer_mask) + '</td>' + (g.lines.some(x => x.agent) ? '<td class="l small">' + esc(agentLabel(l, g.partner) || "-") + "</td>" : "") + (S.phoneOK ? '<td><input type="text" data-g="phone" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.phone || "") + '" placeholder="010-0000-0000" style="width:150px;height:36px"></td>' : "") + '<td class="l">' + esc(l.product) + "</td><td>" + esc(l.open_date) + '</td><td><input type="date" data-g="term" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.term_date) + '" style="height:36px"></td><td><input type="number" min="0" max="100" data-g="rate" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + (l.rate_pct == null ? "" : l.rate_pct) + '" style="width:80px;height:36px"></td><td class="n">' + fmt(Math.round(l.amount * pvf(g))) + "</td></tr>").join("") + "</tbody></table></div></div>";
     });
     h += "</div>";
   });
@@ -1926,7 +1928,7 @@ function partnerSheets(partner, sub){
   const leftHead = ["정산일", "고객"].concat(withAgent ? ["유치자"] : []).concat(phone ? ["명의자 연락처"] : []).concat(withSub ? ["가입번호"] : []).concat(["상품", "개통일", "해지일", "환수율(%)", "환수금액", "정산 비고"]);
   const rightHead = ["정산일", "세무유형", "세금계산서", "환수건수", "환수금", "일반정산금", "총합계", "차감 반영", "입금 확인", "미해결 잔액", "상태", "경과일"];
   const left = [], right = [];
-  rows.forEach(r => r.lines.forEach(l => left.push([r.settle_date, l.customer_mask].concat(withAgent ? [l.agent || ""] : []).concat(phone ? [l.phone_mask || ""] : []).concat(withSub ? [sub.get(r.settle_date + "|" + l.src_no) || ""] : []).concat([l.product, l.open_date || "", l.term_date || "", l.rate_pct == null ? "" : l.rate_pct, Number(l.amount), l.note || ""]))));
+  rows.forEach(r => r.lines.forEach(l => left.push([r.settle_date, l.customer_mask].concat(withAgent ? [agentLabel(l, partner)] : []).concat(phone ? [l.phone_mask || ""] : []).concat(withSub ? [sub.get(r.settle_date + "|" + l.src_no) || ""] : []).concat([l.product, l.open_date || "", l.term_date || "", l.rate_pct == null ? "" : l.rate_pct, Number(l.amount), l.note || ""]))));
   rows.forEach(r => right.push([r.settle_date, r.tax_type, r.tax_status, r.lines.length, r.claw_sum, r.normal_sum, r.carry, r.ded, r.pay, r.unresolved, r.status, r.age == null ? "" : r.age]));
   const amtL = leftHead.indexOf("환수금액"), L = leftHead.length, R0 = L + 1;      // 가운데 1열은 빈 칸(여백)
   const sum = (arr, i) => arr.reduce((t, x) => t + (Number(x[i]) || 0), 0);
@@ -4016,17 +4018,18 @@ makeLiveAPI = function(){
 
 /* ---------- v41: 유치자(지점)별 보기 ---------- */
 function agentSummary(p){
-  const by = new Map(); let n = 0;
+  const by = new Map(); let n = 0, branch = false;
   S.rows.filter(r => r.partner === p).forEach(r => (r.lines || []).forEach(l => {
-    const k = l.agent || "(유치자 없음)"; if (!by.has(k)) by.set(k, { name: k, claw: 0, count: 0, lines: [], stmts: new Set() });
+    if (agentIsBranch(l, p)) branch = true;
+    const k = agentLabel(l, p) || "(유치자 없음)"; if (!by.has(k)) by.set(k, { name: k, claw: 0, count: 0, lines: [], stmts: new Set() });
     const a = by.get(k); a.claw += Number(l.amount); a.count++; a.lines.push({ l, r }); a.stmts.add(r.settle_date); n++;
   }));
   const list = Array.from(by.values()).map(a => Object.assign(a, { stmts: Array.from(a.stmts) })).sort((a, b) => b.claw - a.claw);
-  return { list, real: list.filter(a => a.name !== "(유치자 없음)"), count: n };
+  return { list, real: list.filter(a => a.name !== "(유치자 없음)"), count: n, branch, show: list.filter(a => a.name !== "(유치자 없음)").length >= 2 || (branch && list.some(a => a.name !== "(유치자 없음)")) };
 }
-function agentBadge(p){ const ag = agentSummary(p); return ag.real.length >= 2 ? ' <span class="badge b-gray" title="유치자(지점) ' + ag.real.length + '곳 — 업체조회 옆에서 유치자별로 볼 수 있어요">유치자 ' + ag.real.length + "곳</span>" : ""; }
+function agentBadge(p){ const ag = agentSummary(p); return ag.show ? ' <span class="badge b-gray" title="유치자(지점) ' + ag.real.length + '곳 — 업체조회 옆에서 유치자별로 볼 수 있어요">유치자 ' + ag.real.length + "곳</span>" : ""; }
 function agentChips(g){
-  const set = []; g.lines.concat(g.normalLines || []).forEach(l => { if (l.agent && !set.includes(l.agent)) set.push(l.agent); });
+  const set = []; g.lines.concat(g.normalLines || []).forEach(l => { const a = agentLabel(l, g.partner); if (a && !set.includes(a)) set.push(a); });
   return set.length ? ' <span class="muted small">유치자 ' + set.length + "곳: " + set.slice(0, 6).map(esc).join(" · ") + (set.length > 6 ? " 외 " + (set.length - 6) + "곳" : "") + "</span>" : "";
 }
 function agentPanel(p, ag){
@@ -4043,7 +4046,7 @@ function agentPanel(p, ag){
 const vViewBeforeAgent = vView;
 vView = () => {
   const h = vViewBeforeAgent(), p = S.sel && S.sel.partner; if (!p) return h;
-  const ag = agentSummary(p); if (ag.real.length < 2) return h;
+  const ag = agentSummary(p); if (!ag.show) return h;
   return '<div class="vlayout"><div class="vmain">' + h + '</div><aside class="vside" aria-label="유치자별 현황">' + agentPanel(p, ag) + "</aside></div>";
 };
 async function v41Act(a, el){
