@@ -602,23 +602,9 @@ button:focus-visible,a[data-act]:focus-visible{outline:3px solid #26A9E0;outline
 .bulk-tax{background:#F0F9FF;border:1.5px solid #B9D3EC}
 .bulk-file{margin:10px 0 2px;padding:10px 14px;background:#F0F9FF;border-radius:12px}
 
-/* ===== v41: 유치자(지점)별 옆 패널 ===== */
-.vlayout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;align-items:start}
-.vmain{min-width:0}
-.vside{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto}
-@media (max-width:1180px){.vlayout{grid-template-columns:1fr}.vside{position:static;max-height:none}}
-.agentp{padding:16px}
-.ap-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
-.ap-item{display:block;width:100%;text-align:left;background:#fff;border:1.5px solid #E1E6EC;border-radius:12px;padding:10px 12px;margin-bottom:8px;cursor:pointer;font:inherit;color:inherit}
-.ap-item:hover{border-color:#26A9E0;background:#F6FBFE}
-.ap-item.on{border-color:#0B6FA8;background:#EAF6FD;box-shadow:0 0 0 2px rgba(11,111,168,.15)}
-.ap-item:focus-visible{outline:3px solid #26A9E0;outline-offset:2px}
-.ap-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-.ap-amt{font-weight:800;color:#C0392B}
-.ap-bar{display:block;height:6px;border-radius:4px;background:#EDF0F3;margin:6px 0 4px;overflow:hidden}
-.ap-bar i{display:block;height:100%;background:linear-gradient(90deg,#F29A8F,#C0392B);border-radius:4px}
-.ap-detail{margin-top:10px;border-top:1px dashed #D5DBE2;padding-top:10px}
-.ap-dh{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px}
+/* ===== v43: 업체조회 유치자 선택칸 ===== */
+.agent-note{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;background:#EAF6FD;border:1.5px solid #B9D3EC;border-radius:12px;padding:9px 14px;margin:6px 0 12px}
+#va{min-width:150px;max-width:260px}
 
 </style>
 </head>
@@ -2220,6 +2206,7 @@ document.addEventListener("change", async e => {
   if (v23Change(e) || v22Change(e) || v21Change(e) || v20Change(e) || v19Change(e) || v17Change(e)) return;
   if (t.dataset && t.dataset.tax){ await changeTax(t.dataset.p, t.dataset.d, t.value); return; }
   if (t.id === "vp"){ S.sel.partner = t.value; S.sel.date = ""; renderTab(); }
+  else if (t.id === "va"){ agentPick(t.value); }
   else if (t.id === "vd"){ S.sel.date = t.value; renderTab(); }
   else if (t.id === "keepsub"){ S.keepSub = !!t.checked; renderTab(); }
   else if (t.id === "ftaxtype"){ S.f.tax = t.value; $("#ovTable").innerHTML = overviewTable(); }
@@ -4032,27 +4019,38 @@ function agentChips(g){
   const set = []; g.lines.concat(g.normalLines || []).forEach(l => { const a = agentLabel(l, g.partner); if (a && !set.includes(a)) set.push(a); });
   return set.length ? ' <span class="muted small">유치자 ' + set.length + "곳: " + set.slice(0, 6).map(esc).join(" · ") + (set.length > 6 ? " 외 " + (set.length - 6) + "곳" : "") + "</span>" : "";
 }
-function agentPanel(p, ag){
-  const sel = S.agentSelP === p ? S.agentSel : "", total = ag.list.reduce((t, a) => t + a.claw, 0), max = Math.max.apply(null, ag.list.map(a => a.claw).concat([1]));
-  let h = '<section class="card agentp"><div class="ap-h"><b>유치자별 현황</b><span class="muted small">' + ag.real.length + "곳 · 환수 " + ag.count + "건 · " + won(total) + '</span></div><p class="muted small" style="margin:4px 0 10px">이 업체(본점)에 속한 유치자(지점)별로 환수 건을 모았어요. 눌러서 자세히 보세요.</p>';
-  ag.list.forEach(a => { h += '<button class="ap-item' + (sel === a.name ? " on" : "") + '" data-act="agentsel" data-a="' + esc(a.name) + '" aria-pressed="' + (sel === a.name) + '"><span class="ap-top"><b>' + esc(a.name) + '</b><span class="ap-amt">' + won(a.claw) + '</span></span><span class="ap-bar"><i style="width:' + Math.round(a.claw / max * 100) + '%"></i></span><span class="muted small">환수 ' + a.count + "건 · 정산서 " + a.stmts.length + "건</span></button>"; });
-  const a = ag.list.find(x => x.name === sel);
-  if (a){
-    const rows = a.lines.slice().sort((x, y) => x.r.settle_date < y.r.settle_date ? 1 : x.r.settle_date > y.r.settle_date ? -1 : (x.l.src_no || 0) - (y.l.src_no || 0));
-    h += '<div class="ap-detail"><div class="ap-dh"><b>' + esc(a.name) + "</b> 환수 건 " + a.count + '건 <button class="lnk" data-act="agentsel" data-a="' + esc(a.name) + '">닫기</button></div><div class="tw" style="max-height:340px;overflow:auto"><table><thead><tr><th class="l">정산일</th><th class="l">고객</th><th class="l">상품</th><th>해지일</th><th>금액</th></tr></thead><tbody>' + rows.map(x => '<tr class="click" data-act="open" data-p="' + esc(p) + '" data-d="' + x.r.settle_date + '"><td class="l muted">' + x.r.settle_date + '</td><td class="l">' + esc(x.l.customer_mask) + '</td><td class="l small muted">' + esc(x.l.product || "") + "</td><td>" + (x.l.term_date ? esc(ds(x.l.term_date)) : "-") + '</td><td class="n"><b class="red">' + fmt(x.l.amount) + "</b></td></tr>").join("") + '</tbody></table></div><div class="muted small" style="margin-top:6px">줄을 누르면 그 정산서가 열려요.</div></div>';
-  }
-  return h + "</section>";
+const agentKey = (l, p) => agentLabel(l, p) || "(유치자 없음)";
+function agentSelect(ag, sel){
+  return '<label class="muted">유치자</label><select id="va" aria-label="유치자 선택"><option value="">전체 (' + ag.real.length + "곳)</option>" + ag.list.map(a => '<option value="' + esc(a.name) + '"' + (sel === a.name ? " selected" : "") + ">" + esc(a.name) + " (환수 " + a.count + "건)</option>").join("") + "</select>";
 }
+/* 업체조회: 유치자를 고르면 그 유치자의 환수 건이 있는 정산서와 환수 건 줄만 보여 줌 (고르지 않으면 예전 그대로) */
 const vViewBeforeAgent = vView;
 vView = () => {
-  const h = vViewBeforeAgent(), p = S.sel && S.sel.partner; if (!p) return h;
-  const ag = agentSummary(p); if (!ag.show) return h;
-  return '<div class="vlayout"><div class="vmain">' + h + '</div><aside class="vside" aria-label="유치자별 현황">' + agentPanel(p, ag) + "</aside></div>";
+  const p = S.sel && S.sel.partner; if (!p) return vViewBeforeAgent();
+  const ag = agentSummary(p); if (!ag.show) return vViewBeforeAgent();
+  const sel = (S.agentSelP === p && ag.list.some(a => a.name === S.agentSel)) ? S.agentSel : "";
+  let html;
+  if (!sel) html = vViewBeforeAgent();
+  else {
+    const saved = S.rows, keep = r => r.partner !== p || (r.lines || []).some(l => agentKey(l, p) === sel);
+    const filtered = saved.filter(keep).map(r => r.partner !== p ? r : Object.assign({}, r, { lines: r.lines.filter(l => agentKey(l, p) === sel) }));
+    if (!filtered.some(r => r.partner === p && r.settle_date === S.sel.date)){ const last = filtered.filter(r => r.partner === p).sort((a, b) => a.settle_date < b.settle_date ? 1 : -1)[0]; if (last) S.sel.date = last.settle_date; }
+    S.rows = filtered; try { html = vViewBeforeAgent(); } finally { S.rows = saved; }
+    const a = ag.list.find(x => x.name === sel), n = filtered.filter(r => r.partner === p).length;
+    const note = '<div class="agent-note"><span>유치자 <b>' + esc(sel) + "</b> 보기 · 이 유치자가 있는 정산서 " + n + "건 · 환수 " + a.count + "건 합계 <b>" + won(a.claw) + '</b></span><span class="muted small">처리 기록(차감·입금)과 위의 받을 돈은 정산서 단위라 유치자별로 나누지 않아요.</span><button class="lnk" data-act="agentsel" data-a="">전체 보기</button></div>';
+    html = html.replace('<section class="card vhero">', note + '<section class="card vhero">').replace('<div class="vs-h">이 업체 전체</div>', '<div class="vs-h">이 업체 · 선택한 유치자가 있는 정산서</div>');
+  }
+  return html.replace(/(<select id="vd">[\s\S]*?<\/select>)/, "$1" + agentSelect(ag, sel));
 };
+function agentPick(v){
+  const p = S.sel && S.sel.partner; if (!p) return;
+  S.agentSelP = p; S.agentSel = v || "";
+  if (v){ const ok = S.rows.filter(r => r.partner === p && (r.lines || []).some(l => agentKey(l, p) === v)).sort((a, b) => a.settle_date < b.settle_date ? 1 : -1); if (ok.length && !ok.some(r => r.settle_date === S.sel.date)) S.sel.date = ok[0].settle_date; }
+  renderTab();
+}
 async function v41Act(a, el){
   if (a !== "agentsel") return false;
-  const p = S.sel && S.sel.partner, nm = el.dataset.a;
-  S.agentSel = (S.agentSelP === p && S.agentSel === nm) ? "" : nm; S.agentSelP = p; renderTab(); return true;
+  agentPick(el.dataset.a || ""); return true;
 }
 
 /* ---------- v40: 세무방식 일괄 설정 ---------- */
