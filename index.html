@@ -606,6 +606,9 @@ button:focus-visible,a[data-act]:focus-visible{outline:3px solid #26A9E0;outline
 .agent-note{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;background:#EAF6FD;border:1.5px solid #B9D3EC;border-radius:12px;padding:9px 14px;margin:6px 0 12px}
 #va{min-width:150px;max-width:260px}
 
+/* ===== v45: 가입서비스번호 열 ===== */
+.svc{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-size:12.5px;color:#3B4756;white-space:nowrap;user-select:all}
+
 </style>
 </head>
 <body>
@@ -819,11 +822,11 @@ function extractFromRows(rows, fileName, maskStyle, withSub, sheetName){
     if (!groups.has(key)) groups.set(key, { partner, settleDate: settle, taxType: fileTax, taxFrom: fileTax ? dt.from : "", normalSum: 0, normalCount: 0, clawSum: 0, lines: [], normalLines: [], excluded: [], warnings: [] });
     const g = groups.get(key); if (!g.blk) g.blk = new Set(); g.blk.add(bi); binfo[bi].groups.add(key);
     const prod = [r[C.prod], r[C.opt]].filter(x => x != null && String(x).trim() !== "").map(x => String(x).trim()).join(" / ");
-    const note = cleanNote(r[C.note]), agent = C.agent == null ? "" : String(r[C.agent] == null ? "" : r[C.agent]).replace(/\s+/g, " ").trim().slice(0, 60);
+    const note = cleanNote(r[C.note]), agent = C.agent == null ? "" : String(r[C.agent] == null ? "" : r[C.agent]).replace(/\s+/g, " ").trim().slice(0, 60), svc = C.svc == null ? "" : String(r[C.svc] == null ? "" : r[C.svc]).replace(/\s+/g, " ").trim().slice(0, 80);
     if (amt > 0){   /* 양수 = 일반 정산 */
       g.normalSum += amt; g.normalCount++;
       if (kind === "환수") g.warnings.push("번호 " + (r[C.no] == null ? "?" : r[C.no]) + ": 정산종류는 '환수'인데 정산금액이 양수(+)예요. 일반 정산으로 읽었어요. 확인해 주세요.");
-      g.normalLines.push({ src_no: Number(r[C.no]) || null, customer_mask: maskName(r[C.cust], maskStyle), product: prod, open_date: toISO(r[C.open]), amount: amt, note, agent });
+      g.normalLines.push({ src_no: Number(r[C.no]) || null, customer_mask: maskName(r[C.cust], maskStyle), product: prod, open_date: toISO(r[C.open]), amount: amt, note, agent, svc_no: svc });
       continue;
     }
     /* 음수 = 환수 */
@@ -835,7 +838,7 @@ function extractFromRows(rows, fileName, maskStyle, withSub, sheetName){
       if (pn.rate == null && !pn.other && !pn.rateNA) g.warnings.push("번호 " + nno + ": 비고에서 환수율을 찾지 못했습니다. 아래에서 직접 입력하세요.");
     }
     g.clawSum += -amt;
-    g.lines.push(Object.assign({ src_no: Number(r[C.no]) || null, customer_mask: maskName(r[C.cust], maskStyle), product: prod, open_date: toISO(r[C.open]), term_date: pn.term, rate_pct: pn.rate, amount: -amt, note, agent }, withSub ? { sub_no: String(C.svc == null || r[C.svc] == null ? "" : r[C.svc]).trim().slice(0, 300) } : {}));
+    g.lines.push(Object.assign({ src_no: Number(r[C.no]) || null, customer_mask: maskName(r[C.cust], maskStyle), product: prod, open_date: toISO(r[C.open]), term_date: pn.term, rate_pct: pn.rate, amount: -amt, note, agent, svc_no: svc }, withSub ? { sub_no: String(C.svc == null || r[C.svc] == null ? "" : r[C.svc]).trim().slice(0, 300) } : {}));
   }
   if (numericSkip > 0 && numericSkip >= cand * 0.5) throw new Error("업체(인수처) 칸을 잘못 읽은 것 같아요. 업체 이름 자리에 숫자 '" + firstNumeric + "'(엑셀 날짜·시간 숫자일 수 있어요)가 읽혔어요. 읽은 제목(열): " + RC.info + " → 파일의 제목 줄에서 '인수처' 제목이 어느 열인지 확인해 주세요.");
   const list = Array.from(groups.values());
@@ -1326,7 +1329,7 @@ function makeLiveAPI(){
       return { statements, lines, actions, members, taxRows: tx.data, taxLog: tl.data, taxOK: tx.ok && tl.ok, cases: lc.data, events: le.data, legalOK: lc.ok && le.ok, phoneOK: !ph.error, notes, notesOK: nt.ok, legalEditOK: !!ee && !ee.error, subServerOK, subStat, subLog, normalLines: [], normalOK: false };
     },
     async saveStatement(stmt, lines, overwrite){
-      const clean = lines.map(l => { const { sub_no, agent, ...rest } = l; return rest; });   // 가입번호는 화면용 저장에 섞지 않음
+      const clean = lines.map(l => { const { sub_no, agent, svc_no, ...rest } = l; return rest; });   // 가입번호는 화면용 저장에 섞지 않음
       const { data, error } = await S.sb.rpc("save_statement", { p_stmt: stmt, p_lines: clean, p_overwrite: !!overwrite });
       if (error){ if ((error.message || "").includes("ALREADY_EXISTS")) throw new Error("이미 등록된 정산서입니다."); throw new Error(error.message); }
       if (CONFIG.SUB_MODE === "server" && S.subServerOK){
@@ -1336,6 +1339,10 @@ function makeLiveAPI(){
       if (S.caps && S.caps.agents){
         const items = lines.filter(l => l.agent).map(l => ({ src_no: l.src_no == null ? null : l.src_no, mask: l.customer_mask, amount: l.amount, agent: l.agent }));
         if (items.length){ try { await rpc("set_line_agents", { p_statement_id: data, p_items: items }); } catch (e) { throw new Error("정산서는 저장됐지만 유치자 저장에 실패했어요: " + e.message); } }
+      }
+      if (S.caps && S.caps.svc){
+        const items = lines.filter(l => l.svc_no).map(l => ({ src_no: l.src_no == null ? null : l.src_no, mask: l.customer_mask, amount: l.amount, svc_no: l.svc_no }));
+        if (items.length){ try { await rpc("set_line_svc", { p_statement_id: data, p_items: items }); } catch (e) { throw new Error("정산서는 저장됐지만 가입서비스번호 저장에 실패했어요: " + e.message); } }
       }
       return data;
     },
@@ -1702,8 +1709,8 @@ function vView(){
   const relNote = relL.length ? ' <span class="muted small">· 정산관련 ' + relL.length + "건 " + fmt(relSum) + "원 포함</span>" : "";
   const normalHtml = '<div class="sec k-norm">② 이번 정산 일반 정산 건' + (nlines.length ? " (" + nlines.length + "건)" : "") + "</div>" +
     (!S.normalOK ? setupNote("일반 정산 건 이력 칸이 아직 설정되지 않았어요.") + '<div class="card form muted">일반 정산금 합계 ' + won(cur.normal_sum) + "만 저장되어 있어요.</div>"
-      : nlines.length ? '<div class="card tw"><table style="min-width:720px"><thead><tr><th>번호</th><th class="l">고객</th><th class="l">상품</th><th>개통일</th><th class="n">정산금액</th><th class="l">정산 비고</th></tr></thead><tbody>' +
-        nlines.map(l => '<tr' + (isSettleRel(l) ? ' class="rel"' : "") + '><td class="muted">' + (l.src_no == null ? "" : l.src_no) + '</td><td class="l"><b>' + esc(l.customer_mask) + '</b></td><td class="l">' + esc(l.product) + (isSettleRel(l) ? ' <span class="badge b-amber">정산관련</span>' : "") + "</td><td>" + esc(l.open_date || "") + '</td><td class="n"><b class="blue">' + fmt(l.amount) + '</b></td><td class="l small muted">' + esc(l.note || "") + "</td></tr>").join("") +
+      : nlines.length ? '<div class="card tw"><table style="min-width:720px"><thead><tr><th>번호</th><th class="l">고객</th>' + (nlines.some(l => l.svc_no) ? '<th class="l">가입서비스</th>' : "") + '<th class="l">상품</th><th>개통일</th><th class="n">정산금액</th><th class="l">정산 비고</th></tr></thead><tbody>' +
+        nlines.map(l => '<tr' + (isSettleRel(l) ? ' class="rel"' : "") + '><td class="muted">' + (l.src_no == null ? "" : l.src_no) + '</td><td class="l"><b>' + esc(l.customer_mask) + '</b></td>' + (nlines.some(x => x.svc_no) ? '<td class="l small svc">' + esc(l.svc_no || "-") + "</td>" : "") + '<td class="l">' + esc(l.product) + (isSettleRel(l) ? ' <span class="badge b-amber">정산관련</span>' : "") + "</td><td>" + esc(l.open_date || "") + '</td><td class="n"><b class="blue">' + fmt(l.amount) + '</b></td><td class="l small muted">' + esc(l.note || "") + "</td></tr>").join("") +
         '<tr class="tot"><td colspan="4" style="text-align:right">일반 정산금 합계</td><td class="n">' + fmt(nSum) + "</td><td>" + (nSum === Number(cur.normal_sum) ? '<span class="muted small">정산서 합계와 같아요</span>' : '<span class="warn">정산서 합계 ' + fmt(cur.normal_sum) + "원과 달라요</span>") + relNote + "</td></tr></tbody></table></div>"
       : '<div class="card form muted">' + (Number(cur.normal_sum) !== 0 ? "이 정산서는 일반 정산 건 상세가 저장되지 않았고 합계(" + won(cur.normal_sum) + ")만 있어요. 같은 파일을 다시 올리면(덮어쓰기) 상세가 남아요." : "일반 정산 건이 없어요.") + "</div>");
   const flowHtml = '<div class="flowwrap"><section class="card flowcard"><div class="flowrow">' +
@@ -1723,8 +1730,8 @@ function vView(){
     (FEAT.cal ? calHtml(cur.partner, cur.settle_date) : "") + '<div class="sec">선택한 주차 상세 · ' + mmdd(cur.settle_date) + " 정산</div>" +
     flowHtml + partnerSummaryHtml(mine) + weekCardsHtml(mine, cur) + dunStrip(cur.partner) + costStrip(cur.partner) +
     '<div class="banner">' + esc(cur.partner) + " (" + esc(cur.tax_type) + ") · " + cur.settle_date + " 정산 " + wmBadge(cur) + " · 상태: " + badge(cur.status) + " · 정산서 합계(세금 반영) " + won(taxTotal(cur)) + "</div>" + wmCtl(cur) +
-    '<div class="sec k-claw">① 이번 정산 환수 건</div><div class="card tw"><table style="min-width:860px"><thead><tr><th class="l">고객</th>' + (cur.lines.some(l => l.agent) ? '<th class="l">유치자</th>' : "") + (S.phoneOK ? "<th>명의자 연락처</th>" : "") + '<th class="l">상품</th><th>개통일</th><th>해지일</th><th>환수율</th><th class="n">환수금액</th><th class="l">정산 비고</th></tr></thead><tbody>' +
-    (cur.lines.length ? cur.lines.map(l => '<tr><td class="l"><b>' + esc(l.customer_mask) + '</b></td>' + (cur.lines.some(x => x.agent) ? '<td class="l small">' + esc(agentLabel(l, cur.partner) || "-") + "</td>" : "") + (S.phoneOK ? '<td class="muted">' + esc(l.phone_mask || "-") + "</td>" : "") + '<td class="l">' + esc(l.product) + "</td><td>" + esc(l.open_date || "") + "</td><td>" + (l.term_date ? esc(l.term_date) : '<span class="warn">비고확인</span>') + "</td><td>" + (l.rate_pct == null ? '<span class="warn">비고확인</span>' : l.rate_pct + "%") + '</td><td class="n"><b class="red">' + fmt(l.amount) + '</b></td><td class="l small muted">' + esc(l.note) + "</td></tr>").join("") : '<tr><td colspan="7" class="empty">환수 건이 없어요.</td></tr>') +
+    '<div class="sec k-claw">① 이번 정산 환수 건</div><div class="card tw"><table style="min-width:860px"><thead><tr><th class="l">고객</th>' + (cur.lines.some(l => l.svc_no) ? '<th class="l">가입서비스</th>' : "") + (cur.lines.some(l => l.agent) ? '<th class="l">유치자</th>' : "") + (S.phoneOK ? "<th>명의자 연락처</th>" : "") + '<th class="l">상품</th><th>개통일</th><th>해지일</th><th>환수율</th><th class="n">환수금액</th><th class="l">정산 비고</th></tr></thead><tbody>' +
+    (cur.lines.length ? cur.lines.map(l => '<tr><td class="l"><b>' + esc(l.customer_mask) + '</b></td>' + (cur.lines.some(x => x.svc_no) ? '<td class="l small svc">' + esc(l.svc_no || "-") + "</td>" : "") + (cur.lines.some(x => x.agent) ? '<td class="l small">' + esc(agentLabel(l, cur.partner) || "-") + "</td>" : "") + (S.phoneOK ? '<td class="muted">' + esc(l.phone_mask || "-") + "</td>" : "") + '<td class="l">' + esc(l.product) + "</td><td>" + esc(l.open_date || "") + "</td><td>" + (l.term_date ? esc(l.term_date) : '<span class="warn">비고확인</span>') + "</td><td>" + (l.rate_pct == null ? '<span class="warn">비고확인</span>' : l.rate_pct + "%") + '</td><td class="n"><b class="red">' + fmt(l.amount) + '</b></td><td class="l small muted">' + esc(l.note) + "</td></tr>").join("") : '<tr><td colspan="7" class="empty">환수 건이 없어요.</td></tr>') +
     '<tr class="tot"><td colspan="' + (S.phoneOK ? 6 : 5) + '" style="text-align:right">환수금 합계</td><td class="n">' + fmt(cur.lines.reduce((t, l) => t + Number(l.amount), 0)) + "</td><td></td></tr></tbody></table></div>" +
     normalHtml + '<div class="sec">③ 차감·입금 처리 기록</div>' + actionsTable(acts, false) + planSection(cur.partner, cur) +
     (can.action() ? '<div class="card form"><b>처리 기록 추가</b> <span class="muted small">· ' + S.sel.date + " 정산 · 남은 금액 " + won(cur.unresolved) + '</span><div class="grid-f" style="margin-top:12px">' +
@@ -1815,7 +1822,7 @@ function vUpload(){
     '<div class="drop" id="drop">정산내역서 엑셀 파일(.xlsx)을 여기에 끌어다 놓거나 눌러서 선택하세요<br><span class="muted small">여러 파일을 한 번에 올릴 수 있어요</span><input type="file" id="file" multiple accept=".xlsx,.xls" style="display:none"></div>' +
     (S.subServerOK && can.manage() ? '<label class="keepsub"><input type="checkbox" id="keepsub"' + (S.keepSub ? " checked" : "") + '> <span><b>가입번호도 함께 보관하기</b><br><span class="muted small">서버의 보관함에 따로 저장돼요. 화면에는 표시하지 않고, 관리자만 업체조회의 엑셀로 꺼낼 수 있어요. 가져올 때마다 조회 기록이 남아요.</span></span></label>' : "") + wmOptionHtml() + bulkTaxBar(-1);
   S.staged.forEach((f, fi) => {
-    h += '<div class="card form"><b>' + esc(f.name) + "</b>" + (f.colInfo ? '<div class="muted small" style="margin-top:2px">읽은 제목(열): ' + esc(f.colInfo) + "</div>" : "") + (f.groups ? '<div class="muted small" style="margin-top:2px">줄 구분: 정산금액이 <b>음수(−)면 환수, 양수(+)면 일반 정산</b>으로 읽어요. 정산종류가 \'환수\'인데 금액이 +인 줄만 알려 드려요.' + (f.zero ? " · 금액 0원 줄 " + f.zero + "건은 건너뛰었어요" : "") + "</div>" : "") + ((S.mode === "live" && !(S.caps && S.caps.agents) && f.groups && f.groups.some(g => g.lines.some(l => l.agent))) ? '<div class="warn" style="margin-top:6px">⚠ 유치자를 읽었지만 <b>서버 설정 8(08_유치자.sql)</b>을 아직 돌리지 않아서 저장되지 않아요. SQL을 돌린 뒤 이 파일을 다시 올려 주세요.</div>' : "") + ((f.dormant || []).length ? '<div class="muted small" style="margin-top:2px">휴면(휴) 업체는 읽지 않았어요: ' + f.dormant.map(d => esc(d.name) + " (환수 " + d.claw + "건" + (d.normal ? " · 일반 " + d.normal + "건" : "") + ")").join(", ") + "</div>" : "");
+    h += '<div class="card form"><b>' + esc(f.name) + "</b>" + (f.colInfo ? '<div class="muted small" style="margin-top:2px">읽은 제목(열): ' + esc(f.colInfo) + "</div>" : "") + (f.groups ? '<div class="muted small" style="margin-top:2px">줄 구분: 정산금액이 <b>음수(−)면 환수, 양수(+)면 일반 정산</b>으로 읽어요. 정산종류가 \'환수\'인데 금액이 +인 줄만 알려 드려요.' + (f.zero ? " · 금액 0원 줄 " + f.zero + "건은 건너뛰었어요" : "") + "</div>" : "") + ((S.mode === "live" && !(S.caps && S.caps.agents) && f.groups && f.groups.some(g => g.lines.some(l => l.agent))) ? '<div class="warn" style="margin-top:6px">⚠ 유치자를 읽었지만 <b>서버 설정 8(08_유치자.sql)</b>을 아직 돌리지 않아서 저장되지 않아요. SQL을 돌린 뒤 이 파일을 다시 올려 주세요.</div>' : "") + ((S.mode === "live" && !(S.caps && S.caps.svc) && f.groups && f.groups.some(g => g.lines.some(l => l.svc_no))) ? '<div class="warn" style="margin-top:6px">⚠ 가입서비스번호를 읽었지만 <b>서버 설정 9(09_가입서비스번호.sql)</b>를 아직 돌리지 않아서 저장되지 않아요. SQL을 돌린 뒤 이 파일을 다시 올려 주세요.</div>' : "") + ((f.dormant || []).length ? '<div class="muted small" style="margin-top:2px">휴면(휴) 업체는 읽지 않았어요: ' + f.dormant.map(d => esc(d.name) + " (환수 " + d.claw + "건" + (d.normal ? " · 일반 " + d.normal + "건" : "") + ")").join(", ") + "</div>" : "");
     if (f.error){ h += '<p class="err" style="text-align:left">' + esc(f.error) + "</p></div>"; return; }
     h += bulkTaxBar(fi);
     f.groups.forEach((g, gi) => {
@@ -1826,8 +1833,8 @@ function vUpload(){
       if (ex) h += '<div class="row"><span class="badge b-amber">이미 등록된 정산서</span><label class="muted small"><input type="checkbox" data-g="ow" data-fi="' + fi + '" data-gi="' + gi + '"' + (g.overwrite ? " checked" : "") + "> 덮어쓰기 (처리기록·세금계산서 상태는 유지돼요)</label></div>";
       if (!g.lines.length){ h += '<p class="muted small">환수 건이 없는 정산서라 저장하지 않아요.</p></div>'; return; }
       g.warnings.forEach(w => { h += '<div class="warn">⚠ ' + esc(w) + "</div>"; });
-      h += '<div class="tw" style="margin-top:8px"><table style="min-width:760px"><thead><tr><th>번호</th><th class="l">고객</th>' + (g.lines.some(l => l.agent) ? '<th class="l">유치자</th>' : "") + (S.phoneOK ? "<th>명의자 연락처</th>" : "") + '<th class="l">상품</th><th>개통일</th><th>해지일</th><th>환수율(%)</th><th class="n">환수금액</th></tr></thead><tbody>' +
-        g.lines.map((l, li) => "<tr><td>" + (l.src_no == null ? "" : l.src_no) + '</td><td class="l">' + esc(l.customer_mask) + '</td>' + (g.lines.some(x => x.agent) ? '<td class="l small">' + esc(agentLabel(l, g.partner) || "-") + "</td>" : "") + (S.phoneOK ? '<td><input type="text" data-g="phone" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.phone || "") + '" placeholder="010-0000-0000" style="width:150px;height:36px"></td>' : "") + '<td class="l">' + esc(l.product) + "</td><td>" + esc(l.open_date) + '</td><td><input type="date" data-g="term" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.term_date) + '" style="height:36px"></td><td><input type="number" min="0" max="100" data-g="rate" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + (l.rate_pct == null ? "" : l.rate_pct) + '" style="width:80px;height:36px"></td><td class="n">' + fmt(Math.round(l.amount * pvf(g))) + "</td></tr>").join("") + "</tbody></table></div></div>";
+      h += '<div class="tw" style="margin-top:8px"><table style="min-width:760px"><thead><tr><th>번호</th><th class="l">고객</th>' + (g.lines.some(l => l.svc_no) ? '<th class="l">가입서비스</th>' : "") + (g.lines.some(l => l.agent) ? '<th class="l">유치자</th>' : "") + (S.phoneOK ? "<th>명의자 연락처</th>" : "") + '<th class="l">상품</th><th>개통일</th><th>해지일</th><th>환수율(%)</th><th class="n">환수금액</th></tr></thead><tbody>' +
+        g.lines.map((l, li) => "<tr><td>" + (l.src_no == null ? "" : l.src_no) + '</td><td class="l">' + esc(l.customer_mask) + '</td>' + (g.lines.some(x => x.svc_no) ? '<td class="l small svc">' + esc(l.svc_no || "-") + "</td>" : "") + (g.lines.some(x => x.agent) ? '<td class="l small">' + esc(agentLabel(l, g.partner) || "-") + "</td>" : "") + (S.phoneOK ? '<td><input type="text" data-g="phone" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.phone || "") + '" placeholder="010-0000-0000" style="width:150px;height:36px"></td>' : "") + '<td class="l">' + esc(l.product) + "</td><td>" + esc(l.open_date) + '</td><td><input type="date" data-g="term" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.term_date) + '" style="height:36px"></td><td><input type="number" min="0" max="100" data-g="rate" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + (l.rate_pct == null ? "" : l.rate_pct) + '" style="width:80px;height:36px"></td><td class="n">' + fmt(Math.round(l.amount * pvf(g))) + "</td></tr>").join("") + "</tbody></table></div></div>";
     });
     h += "</div>";
   });
@@ -1869,7 +1876,7 @@ async function saveStaged(){
   let ok = 0;
   for (const g of todo){
     const stmt = { partner: g.partner, settle_date: g.settleDate, tax_type: g.taxType, normal_sum: Math.round(g.normalSum), claw_sum: g.lines.reduce((t, l) => t + Math.round(l.amount), 0), line_count: g.lines.length }; if (FEAT.webmiss) stmt.web_missing = !!g.webMissing;
-    const lines = g.lines.map(l => Object.assign({ src_no: l.src_no, customer_mask: l.customer_mask, phone_mask: S.phoneOK && l.phone ? l.phone : null, product: l.product, open_date: l.open_date || null, term_date: l.term_date || null, rate_pct: l.rate_pct, amount: Math.round(l.amount), note: l.note, agent: l.agent || null }, (S.subServerOK && S.keepSub && l.sub_no) ? { sub_no: l.sub_no } : {}));
+    const lines = g.lines.map(l => Object.assign({ src_no: l.src_no, customer_mask: l.customer_mask, phone_mask: S.phoneOK && l.phone ? l.phone : null, product: l.product, open_date: l.open_date || null, term_date: l.term_date || null, rate_pct: l.rate_pct, amount: Math.round(l.amount), note: l.note, agent: l.agent || null, svc_no: l.svc_no || null }, (S.subServerOK && S.keepSub && l.sub_no) ? { sub_no: l.sub_no } : {}));
     try { await API.saveStatement(stmt, lines, g.overwrite, S.normalOK ? g.normalLines : undefined); ok++; } catch (e) { toast(g.partner + " 저장 실패: " + e.message, true); break; }
   }
   if (ok === todo.length){ S.staged = []; toast(ok + "개 정산서를 저장했어요. 파일 내용은 화면에서 지웠어요."); }
@@ -1915,11 +1922,11 @@ function partnerSheets(partner, sub){
   const rows = S.rows.filter(r => r.partner === partner).sort((a, b) => a.settle_date < b.settle_date ? 1 : a.settle_date > b.settle_date ? -1 : 0);
   const phone = S.phoneOK, blank = n => Array(n).fill("");
   const withSub = !!sub;
-  const withAgent = rows.some(r => r.lines.some(l => l.agent));
-  const leftHead = ["정산일", "고객"].concat(withAgent ? ["유치자"] : []).concat(phone ? ["명의자 연락처"] : []).concat(withSub ? ["가입번호"] : []).concat(["상품", "개통일", "해지일", "환수율(%)", "환수금액", "정산 비고"]);
+  const withAgent = rows.some(r => r.lines.some(l => l.agent)), withSvc = !sub && rows.some(r => r.lines.some(l => l.svc_no));
+  const leftHead = ["정산일", "고객"].concat(withSvc ? ["가입서비스번호"] : []).concat(withAgent ? ["유치자"] : []).concat(phone ? ["명의자 연락처"] : []).concat(withSub ? ["가입번호"] : []).concat(["상품", "개통일", "해지일", "환수율(%)", "환수금액", "정산 비고"]);
   const rightHead = ["정산일", "세무유형", "세금계산서", "환수건수", "환수금", "일반정산금", "총합계", "차감 반영", "입금 확인", "미해결 잔액", "상태", "경과일"];
   const left = [], right = [];
-  rows.forEach(r => r.lines.forEach(l => left.push([r.settle_date, l.customer_mask].concat(withAgent ? [agentLabel(l, partner)] : []).concat(phone ? [l.phone_mask || ""] : []).concat(withSub ? [sub.get(r.settle_date + "|" + l.src_no) || ""] : []).concat([l.product, l.open_date || "", l.term_date || "", l.rate_pct == null ? "" : l.rate_pct, Number(l.amount), l.note || ""]))));
+  rows.forEach(r => r.lines.forEach(l => left.push([r.settle_date, l.customer_mask].concat(withSvc ? [l.svc_no || ""] : []).concat(withAgent ? [agentLabel(l, partner)] : []).concat(phone ? [l.phone_mask || ""] : []).concat(withSub ? [sub.get(r.settle_date + "|" + l.src_no) || l.svc_no || ""] : []).concat([l.product, l.open_date || "", l.term_date || "", l.rate_pct == null ? "" : l.rate_pct, Number(l.amount), l.note || ""]))));
   rows.forEach(r => right.push([r.settle_date, r.tax_type, r.tax_status, r.lines.length, r.claw_sum, r.normal_sum, r.carry, r.ded, r.pay, r.unresolved, r.status, r.age == null ? "" : r.age]));
   const amtL = leftHead.indexOf("환수금액"), L = leftHead.length, R0 = L + 1;      // 가운데 1열은 빈 칸(여백)
   const sum = (arr, i) => arr.reduce((t, x) => t + (Number(x[i]) || 0), 0);
@@ -1941,7 +1948,7 @@ function partnerSheets(partner, sub){
   if (!CONFIG.DISP_VAT) aoa.push(tl2.concat([""], tr2));
   const ftxt = Array.from(new Set(rows.map(r => r.tax_type))).map(k => k + " ×" + (k === "원천세" ? (1 - CONFIG.WITHHOLDING).toFixed(3) : (1 + CONFIG.VAT).toFixed(1))).join(", ");
   aoa.push([]); aoa.push([CONFIG.DISP_VAT ? "금액은 정발행·역발행은 부가세 " + String(+(CONFIG.VAT * 100).toFixed(2)) + "%를 포함한 금액, 원천세는 공급가액이에요. 차감·입금은 실제 처리한 금액이에요." : "세무 반영 합계 = 공급가액에 세무방식 계수를 곱한 업체 안내용 금액이에요 (" + ftxt + "). 차감·입금은 실제 처리한 금액이라 곱하지 않아요."]);
-  const cols = leftHead.map(h => ({ "정산일": 12, "고객": 10, "유치자": 16, "명의자 연락처": 17, "가입번호": 26, "상품": 28, "개통일": 12, "해지일": 12, "환수율(%)": 10, "환수금액": 13, "정산 비고": 34 }[h] || 12)).concat([{ wch: 3 }.wch], [12, 10, 12, 10, 13, 13, 13, 12, 12, 13, 10, 8]).map(w => typeof w === "number" ? { wch: w } : w);
+  const cols = leftHead.map(h => ({ "정산일": 12, "고객": 10, "가입서비스번호": 24, "유치자": 16, "명의자 연락처": 17, "가입번호": 26, "상품": 28, "개통일": 12, "해지일": 12, "환수율(%)": 10, "환수금액": 13, "정산 비고": 34 }[h] || 12)).concat([{ wch: 3 }.wch], [12, 10, 12, 10, 13, 13, 13, 12, 12, 13, 10, 8]).map(w => typeof w === "number" ? { wch: w } : w);
   const money = [amtL, R0 + 4, R0 + 5, R0 + 6, R0 + 7, R0 + 8, R0 + 9];
   const sheets = [{ name: xlName(partner, "업체"), aoa, cols, money, firstData: 5 }];
   if (S.normalOK){
@@ -4001,7 +4008,7 @@ makeLiveAPI = function(){
   const base = makeLiveAPIv31(), baseLoad = base.load;
   base.load = async function(){
     const d = await baseLoad(); const pr = await S.sb.from("members").select("works_email").limit(1), lg = await fetchOptional("nw_login_log");
-    d.caps.nwlogin = !pr.error && lg.ok; const ag = await S.sb.from("clawback_lines").select("agent").limit(1); d.caps.agents = !ag.error; d.nwLog = lg.data.slice().sort((a, b) => b.id - a.id); return d;
+    d.caps.nwlogin = !pr.error && lg.ok; const ag = await S.sb.from("clawback_lines").select("agent").limit(1); d.caps.agents = !ag.error; const sv = await S.sb.from("clawback_lines").select("svc_no").limit(1); d.caps.svc = !sv.error; d.nwLog = lg.data.slice().sort((a, b) => b.id - a.id); return d;
   };
   base.setWorksEmail = async (member, works) => { const { error } = await S.sb.rpc("member_set_works_email", { p_member: member, p_works: works }); if (error) throw new Error(error.message); };
   return base;
