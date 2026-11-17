@@ -616,7 +616,8 @@ const CONFIG = {
   SUPABASE_URL: "https://kmlbcmyimkgedkovhjkh.supabase.co",        // 예: "https://abcdxyz.supabase.co"   (비워 두면 '미리보기 모드')
   SUPABASE_ANON_KEY: "sb_publishable_lbbuN5JajDsMeBMgUMiXJw_XdGB-ZsN",   // Supabase > Project Settings > API 의 Publishable key (anon key)
   NAME_MASK: "middle",     // 고객명 가리는 방식: "middle" → 김○미 / "first" → 김○○
-  VAT: 0.10,               // 정발행·역발행 합계 계산용 부가세율
+  VAT: 0.10,
+  DISP_VAT: true,   // true 이면 금액을 '청구 기준'으로 표시: 정발행·역발행은 부가세 포함, 원천세는 공급가액               // 정발행·역발행 합계 계산용 부가세율
   WITHHOLDING: 0.033,      // 원천세율
   STAGE: 3,                // 기능 단계: 1 = 달력·기간 경과 알림 / 2 = + 독촉증빙·독촉 간격 알림 / 3 = + 상환 약정
   SUB_MODE: "server",        // 가입번호 엑셀 방식: "file" = 엑셀을 받을 때 원본 파일을 다시 고름(서버 저장 없음) / "server" = 서버 보관함에 따로 저장했다가 꺼냄
@@ -845,6 +846,8 @@ function statusOf(carry, ded, pay){
   if (carry - done === 0) return "회수완료";
   return done > 0 ? "일부회수" : "이월중";
 }
+/* 화면에 보이는 금액의 계수: 정발행·역발행 = 부가세 포함(×1.1), 원천세 = 공급가액(×1) */
+function dispFactor(type){ return (CONFIG.DISP_VAT && type !== "원천세") ? 1 + CONFIG.VAT : 1; }
 function taxFactor(type, cfg){ return type === "원천세" ? 1 - cfg.WITHHOLDING : 1 + cfg.VAT; }
 function computeRows(statements, lines, actions, taxRows, todayISO, normalLines){
   const lmap = new Map(), amap = new Map(), tmap = new Map(), nmap = new Map();
@@ -857,16 +860,18 @@ function computeRows(statements, lines, actions, taxRows, todayISO, normalLines)
     const acts = amap.get(key) || [];
     const ded = acts.filter(a => a.kind === KIND_DED).reduce((t, a) => t + Number(a.amount), 0);
     const pay = acts.filter(a => a.kind === KIND_PAY).reduce((t, a) => t + Number(a.amount), 0);
-    const claw = Number(s.claw_sum), normal = Number(s.normal_sum);
+    const f = dispFactor(s.tax_type), claw_s = Number(s.claw_sum), normal_s = Number(s.normal_sum);
+    const claw = f === 1 ? claw_s : Math.round(claw_s * f), normal = f === 1 ? normal_s : Math.round(normal_s * f);
+    const scale = arr => f === 1 ? arr : arr.map(l => Object.assign({}, l, { amount: Math.round(Number(l.amount) * f), amount_supply: Number(l.amount) }));
     const carry = Math.max(0, claw - normal), unresolved = Math.max(0, carry - ded - pay);
     const tx = tmap.get(key);
     return Object.assign({}, s, {
-      claw_sum: claw, normal_sum: normal, carry, ded, pay, unresolved,
+      claw_sum: claw, normal_sum: normal, claw_sum_supply: claw_s, normal_sum_supply: normal_s, disp_factor: f, carry, ded, pay, unresolved,
       status: statusOf(carry, ded, pay),
       age: unresolved > 0 ? daysBetween(s.settle_date, todayISO) : null,
       tax_status: s.tax_type === "원천세" ? "미해당" : (tx ? tx.status : "미처리"), tax_by: tx ? tx.updated_by : "", tax_at: tx ? tx.updated_at : "",
-      lines: (lmap.get(s.id) || []).slice().sort((a, b) => (a.src_no || 0) - (b.src_no || 0)),
-      nlines: (nmap.get(s.id) || []).slice().sort((a, b) => (a.src_no || 0) - (b.src_no || 0))
+      lines: scale((lmap.get(s.id) || []).slice().sort((a, b) => (a.src_no || 0) - (b.src_no || 0))),
+      nlines: scale((nmap.get(s.id) || []).slice().sort((a, b) => (a.src_no || 0) - (b.src_no || 0)))
     });
   });
 }
@@ -931,7 +936,7 @@ function matchSubNos(stmtRows, groups, partner){
     (s.lines || []).forEach(l => {
       total++;
       if (!g) return;
-      const it = g.items.find(x => x.src_no === l.src_no && x.amount === Number(l.amount) && x.mask === l.customer_mask);
+      const it = g.items.find(x => x.src_no === l.src_no && x.amount === Number(l.amount_supply != null ? l.amount_supply : l.amount) && x.mask === l.customer_mask);
       if (it){ map.set(s.settle_date + "|" + l.src_no, it.sub); matched++; }
       else problems.push(s.settle_date + " · " + (l.src_no || "?") + "번 " + l.customer_mask + ": 파일에서 같은 건(번호·금액·이름)을 찾지 못했어요");
     });
@@ -1634,7 +1639,7 @@ function vOverview(){
 }
 
 /* ---------- 업체조회 ---------- */
-const taxTotal = r => Math.round((r.normal_sum - r.claw_sum) * taxFactor(r.tax_type, CONFIG));
+const taxTotal = r => CONFIG.DISP_VAT ? Math.round(r.normal_sum - r.claw_sum) : Math.round((r.normal_sum - r.claw_sum) * taxFactor(r.tax_type, CONFIG));
 function actionsTable(acts, showPartner){
   if (!acts.length) return '<div class="card"><div class="empty">처리 기록이 없어요.</div></div>';
   return '<div class="card tw"><table style="min-width:780px"><thead><tr><th>처리일</th>' + (showPartner ? '<th class="l">업체</th>' : "") + '<th>환수발생일</th><th>구분</th><th class="n">금액</th><th>확인 부서</th><th class="l">메모</th><th class="l">입력자</th><th></th></tr></thead><tbody>' +
@@ -1755,15 +1760,16 @@ function normalNote(g){
   return a || b ? '<div class="muted small" style="margin:-2px 0 8px">' + esc(a + b) + "</div>" : "";
 }
 const taxNoteTxt = t => t === "원천세" ? "원천세 " + String(+(CONFIG.WITHHOLDING * 100).toFixed(2)) + "% 차감" : "부가세 " + String(+(CONFIG.VAT * 100).toFixed(2)) + "% 포함";
+const pvf = g => (CONFIG.DISP_VAT && g.taxType) ? dispFactor(g.taxType) : 1;
 function taxSumHtml(g){
-  const supply = g.normalSum - g.clawSum, total = g.taxType ? Math.round(supply * taxFactor(g.taxType, CONFIG)) : null, f = g.file;
-  let h = '<div class="row taxsum" style="gap:18px;margin:2px 0 6px;flex-wrap:wrap"><span>공급가액 <b' + (supply < 0 ? ' class="red"' : "") + ">" + won(supply) + "</b></span>" + (total != null ? "<span>합계금 <b" + (total < 0 ? ' class="red"' : "") + ">" + won(total) + '</b> <span class="muted small">(' + esc(g.taxType) + " · " + taxNoteTxt(g.taxType) + ")</span></span>" : '<span class="muted small">' + (g.vatHint ? "부가세 방식이에요 — 세무유형에서 정발행·역발행 중 골라 주세요" : "세무유형을 고르면 합계금이 나와요") + "</span>") + '<span class="muted small">(−는 업체에서 받을 금액)</span></div>';
+  const supply = g.normalSum - g.clawSum, legal = g.taxType ? Math.round(supply * taxFactor(g.taxType, CONFIG)) : null, total = g.taxType ? (CONFIG.DISP_VAT ? Math.round(supply * dispFactor(g.taxType)) : legal) : null, f = g.file;
+  let h = '<div class="row taxsum" style="gap:18px;margin:2px 0 6px;flex-wrap:wrap"><span>공급가액 <b' + (supply < 0 ? ' class="red"' : "") + ">" + won(supply) + "</b></span>" + (total != null ? "<span>합계금 <b" + (total < 0 ? ' class="red"' : "") + ">" + won(total) + '</b> <span class="muted small">(' + esc(g.taxType) + " · " + (CONFIG.DISP_VAT ? (g.taxType === "원천세" ? "공급가액 기준(부가세 없음)" : "부가세 " + String(+(CONFIG.VAT * 100).toFixed(2)) + "% 포함") : taxNoteTxt(g.taxType)) + ")</span></span>" : '<span class="muted small">' + (g.vatHint ? "부가세 방식이에요 — 세무유형에서 정발행·역발행 중 골라 주세요" : "세무유형을 고르면 합계금이 나와요") + "</span>") + '<span class="muted small">(−는 업체에서 받을 금액)</span></div>';
   if (f){
     const ok = t => '<span class="badge b-green">✓</span> ' + t, wn = t => '<span class="badge b-amber">확인</span> ' + t, bits = [];
     if (f.dormant) bits.push('<span class="muted small">같은 표에 휴면 업체 줄이 있어 파일의 합계와는 비교하지 않았어요 (파일의 공급가액 ' + (f.supply != null ? won(f.supply) : "-") + ")</span>");
     else {
       if (f.supply != null) bits.push(Math.abs(f.supply - supply) < 1 ? ok("파일의 공급가액 " + won(f.supply) + "과 같아요") : wn("파일의 공급가액 " + won(f.supply) + "과 달라요 (차이 " + won(supply - f.supply) + ")" + (f.exclSum ? " · 읽지 않은 줄(추가 등) 합계 " + won(f.exclSum) : "") + (f.skipped ? " · 제외된 줄 " + f.skipped + "건" : "")));
-      if (f.total != null && total != null) bits.push(Math.abs(f.total - total) <= 1.01 ? ok("파일의 합계 " + won(f.total) + "과 같아요") : wn("파일의 합계 " + won(f.total) + "과 달라요 — 세무유형(정발행·역발행=부가세, 원천세)을 확인하세요"));
+      if (f.total != null && legal != null) bits.push(Math.abs(f.total - legal) <= 1.01 ? ok("파일의 합계 " + won(f.total) + (g.taxType === "원천세" ? "(원천세 " + String(+(CONFIG.WITHHOLDING * 100).toFixed(2)) + "% 차감 후)와" : "과") + " 같아요") : wn("파일의 합계 " + won(f.total) + "과 달라요 — 세무유형(정발행·역발행=부가세, 원천세)을 확인하세요"));
       else if (f.total != null) bits.push('<span class="muted small">파일의 합계: ' + won(f.total) + "</span>");
     }
     h += '<div class="row small" style="gap:14px;margin:0 0 6px;flex-wrap:wrap">' + bits.join("") + "</div>";
@@ -1781,12 +1787,12 @@ function vUpload(){
       const ex = S.rows.find(r => r.partner === g.partner && r.settle_date === g.settleDate);
       const carry = Math.max(0, g.clawSum - g.normalSum);
       h += '<div style="border-top:1px solid #EEF0F3;margin-top:12px;padding-top:12px"><div class="row"><b style="font-size:16px">' + esc(g.partner) + '</b><span class="muted">' + g.settleDate + ' 정산</span><label class="muted">세무유형</label><select data-g="tax" data-fi="' + fi + '" data-gi="' + gi + '"><option value="">선택</option>' + CONFIG.TAX_TYPES.map(t => "<option" + (g.taxType === t ? " selected" : "") + ">" + t + "</option>").join("") + "</select>" + (g.taxFrom ? '<span class="muted small">자동 선택: ' + esc(g.taxFrom) + "</span>" : "") + wmGroupHtml(fi, gi, g) + "</div>" +
-        '<div class="row" style="gap:20px;margin:8px 0"><span>일반 ' + g.normalCount + "건 합계 <b>" + won(g.normalSum) + "</b></span><span>환수 " + g.lines.length + '건 합계 <b class="red">' + won(g.clawSum) + "</b></span><span>상계 후 총합계 <b>" + won(carry) + "</b></span>" + (S.subServerOK && can.manage() ? '<span class="muted">가입번호 ' + g.lines.filter(l => l.sub_no).length + "건 읽음 · " + (S.keepSub ? "보관 예정" : "보관 안 함") + "</span>" : "") + "</div>" + taxSumHtml(g) + normalNote(g);
+        '<div class="row" style="gap:20px;margin:8px 0"><span>일반 ' + g.normalCount + "건 합계 <b>" + won(Math.round(g.normalSum * pvf(g))) + "</b></span><span>환수 " + g.lines.length + '건 합계 <b class="red">' + won(Math.round(g.clawSum * pvf(g))) + "</b></span><span>상계 후 총합계 <b>" + won(Math.max(0, Math.round(g.clawSum * pvf(g)) - Math.round(g.normalSum * pvf(g)))) + "</b></span>" + (pvf(g) !== 1 ? '<span class="muted small">(부가세 포함 금액)</span>' : "") + (S.subServerOK && can.manage() ? '<span class="muted">가입번호 ' + g.lines.filter(l => l.sub_no).length + "건 읽음 · " + (S.keepSub ? "보관 예정" : "보관 안 함") + "</span>" : "") + "</div>" + taxSumHtml(g) + normalNote(g);
       if (ex) h += '<div class="row"><span class="badge b-amber">이미 등록된 정산서</span><label class="muted small"><input type="checkbox" data-g="ow" data-fi="' + fi + '" data-gi="' + gi + '"' + (g.overwrite ? " checked" : "") + "> 덮어쓰기 (처리기록·세금계산서 상태는 유지돼요)</label></div>";
       if (!g.lines.length){ h += '<p class="muted small">환수 건이 없는 정산서라 저장하지 않아요.</p></div>'; return; }
       g.warnings.forEach(w => { h += '<div class="warn">⚠ ' + esc(w) + "</div>"; });
       h += '<div class="tw" style="margin-top:8px"><table style="min-width:760px"><thead><tr><th>번호</th><th class="l">고객</th>' + (S.phoneOK ? "<th>명의자 연락처</th>" : "") + '<th class="l">상품</th><th>개통일</th><th>해지일</th><th>환수율(%)</th><th class="n">환수금액</th></tr></thead><tbody>' +
-        g.lines.map((l, li) => "<tr><td>" + (l.src_no == null ? "" : l.src_no) + '</td><td class="l">' + esc(l.customer_mask) + '</td>' + (S.phoneOK ? '<td><input type="text" data-g="phone" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.phone || "") + '" placeholder="010-0000-0000" style="width:150px;height:36px"></td>' : "") + '<td class="l">' + esc(l.product) + "</td><td>" + esc(l.open_date) + '</td><td><input type="date" data-g="term" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.term_date) + '" style="height:36px"></td><td><input type="number" min="0" max="100" data-g="rate" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + (l.rate_pct == null ? "" : l.rate_pct) + '" style="width:80px;height:36px"></td><td class="n">' + fmt(l.amount) + "</td></tr>").join("") + "</tbody></table></div></div>";
+        g.lines.map((l, li) => "<tr><td>" + (l.src_no == null ? "" : l.src_no) + '</td><td class="l">' + esc(l.customer_mask) + '</td>' + (S.phoneOK ? '<td><input type="text" data-g="phone" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.phone || "") + '" placeholder="010-0000-0000" style="width:150px;height:36px"></td>' : "") + '<td class="l">' + esc(l.product) + "</td><td>" + esc(l.open_date) + '</td><td><input type="date" data-g="term" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.term_date) + '" style="height:36px"></td><td><input type="number" min="0" max="100" data-g="rate" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + (l.rate_pct == null ? "" : l.rate_pct) + '" style="width:80px;height:36px"></td><td class="n">' + fmt(Math.round(l.amount * pvf(g))) + "</td></tr>").join("") + "</tbody></table></div></div>";
     });
     h += "</div>";
   });
@@ -1889,15 +1895,16 @@ function partnerSheets(partner, sub){
   aoa.push(leftHead.concat([""], rightHead));
   for (let i = 0; i < n; i++) aoa.push((left[i] || blank(L)).concat([""], right[i] || []));
   const fac = r => taxFactor(r.tax_type, CONFIG);
-  const tl = blank(L); tl[0] = "합계 (공급가액)"; tl[amtL] = sum(left, amtL);
-  const tr = blank(rightHead.length); tr[0] = "합계 (공급가액)"; [3, 4, 5, 6, 7, 8, 9].forEach(i => { tr[i] = sum(right, i); });
+  const sumLabel = CONFIG.DISP_VAT ? "합계 (정발행·역발행 부가세 포함, 원천세 공급가액)" : "합계 (공급가액)";
+  const tl = blank(L); tl[0] = sumLabel; tl[amtL] = sum(left, amtL);
+  const tr = blank(rightHead.length); tr[0] = sumLabel; [3, 4, 5, 6, 7, 8, 9].forEach(i => { tr[i] = sum(right, i); });
   aoa.push(tl.concat([""], tr));
   const rnd = f => rows.reduce((t, r) => t + Math.round(f(r) * fac(r)), 0);
   const tl2 = blank(L); tl2[0] = "세무 반영 합계"; tl2[amtL] = rnd(r => r.claw_sum);
   const tr2 = blank(rightHead.length); tr2[0] = "세무 반영 합계"; tr2[4] = rnd(r => r.claw_sum); tr2[5] = rnd(r => r.normal_sum); tr2[6] = rnd(r => r.carry);
-  aoa.push(tl2.concat([""], tr2));
+  if (!CONFIG.DISP_VAT) aoa.push(tl2.concat([""], tr2));
   const ftxt = Array.from(new Set(rows.map(r => r.tax_type))).map(k => k + " ×" + (k === "원천세" ? (1 - CONFIG.WITHHOLDING).toFixed(3) : (1 + CONFIG.VAT).toFixed(1))).join(", ");
-  aoa.push([]); aoa.push(["세무 반영 합계 = 공급가액에 세무방식 계수를 곱한 업체 안내용 금액이에요 (" + ftxt + "). 차감·입금은 실제 처리한 금액이라 곱하지 않아요."]);
+  aoa.push([]); aoa.push([CONFIG.DISP_VAT ? "금액은 정발행·역발행은 부가세 " + String(+(CONFIG.VAT * 100).toFixed(2)) + "%를 포함한 금액, 원천세는 공급가액이에요. 차감·입금은 실제 처리한 금액이에요." : "세무 반영 합계 = 공급가액에 세무방식 계수를 곱한 업체 안내용 금액이에요 (" + ftxt + "). 차감·입금은 실제 처리한 금액이라 곱하지 않아요."]);
   const cols = leftHead.map(h => ({ "정산일": 12, "고객": 10, "명의자 연락처": 17, "가입번호": 26, "상품": 28, "개통일": 12, "해지일": 12, "환수율(%)": 10, "환수금액": 13, "정산 비고": 34 }[h] || 12)).concat([{ wch: 3 }.wch], [12, 10, 12, 10, 13, 13, 13, 12, 12, 13, 10, 8]).map(w => typeof w === "number" ? { wch: w } : w);
   const money = [amtL, R0 + 4, R0 + 5, R0 + 6, R0 + 7, R0 + 8, R0 + 9];
   const sheets = [{ name: xlName(partner, "업체"), aoa, cols, money, firstData: 5 }];
@@ -1906,7 +1913,7 @@ function partnerSheets(partner, sub){
     const nsum = nrows.reduce((t, x) => t + x[6], 0), nrel = nrows.filter(x => x[3] === "정산관련"), ntax = rows.reduce((t, r) => t + Math.round((r.nlines || []).reduce((s, l) => s + Number(l.amount), 0) * fac(r)), 0);
     const noDetail = rows.filter(r => !(r.nlines || []).length && Number(r.normal_sum) !== 0).map(r => r.settle_date);
     const naoa = [["정산일", "번호", "고객", "구분", "상품", "개통일", "정산금액", "정산 비고"]].concat(nrows);
-    naoa.push(["합계 (공급가액)", "", "", "", "", "", nsum, ""]); naoa.push(["세무 반영 합계", "", "", "", "", "", ntax, ""]);
+    naoa.push([CONFIG.DISP_VAT ? "합계 (정발행·역발행 부가세 포함, 원천세 공급가액)" : "합계 (공급가액)", "", "", "", "", "", nsum, ""]); if (!CONFIG.DISP_VAT) naoa.push(["세무 반영 합계", "", "", "", "", "", ntax, ""]);
     if (nrel.length) naoa.push(["이 중 정산관련 " + nrel.length + "건 (공급가액)", "", "", "", "", "", nrel.reduce((t, x) => t + x[6], 0), ""]);
     if (noDetail.length){ naoa.push([]); naoa.push(["상세가 저장되지 않은 정산일(합계만 있음): " + noDetail.join(", ")]); }
     sheets.push({ name: "일반 정산 건", aoa: naoa, cols: [12, 8, 12, 10, 28, 12, 14, 30].map(w => ({ wch: w })), money: [6], firstData: 1 });
@@ -3558,9 +3565,9 @@ function vOverviewRead(){
     '<div class="rcard"><div class="rl">법적 조치 · 약정</div><div class="rv">' + (showLegal ? legalN + "곳" : "-") + (FEAT.plans ? ' <small>약정 ' + plans.length + "건</small>" : "") + '</div><div class="rs">' + (miss ? '<span class="red">약정 불이행 ' + miss + "건</span>" : showLegal ? "법률진행 중인 업체" : "") + "</div></div></div>" +
     ovTasks() + giftStrip() +
     '<section class="card panel"><div class="panel-h"><div class="chips">' + chip("", "전체", rows.length) + xc(f.aged, "ovaged", "오래된 건", aged.length) + (showLegal ? xc(f.lgany, "ovlegal", "법률진행 중", open.filter(r => legalOf(r)).length) : "") + (FEAT.webmiss ? xc(f.wm, "wmfilter", "웹 미존재", rows.filter(r => r.web_missing).length) : "") + chip("이월중", "이월중", cnt("이월중")) + chip("일부회수", "일부회수", cnt("일부회수")) + (FEAT.completed ? "" : chip("회수완료", "회수완료", cnt("회수완료")) + chip("상계완료", "상계완료", cnt("상계완료"))) + "</div>" +
-    '<div class="row"><span class="seg" role="group" aria-label="보기 방식"><button class="seg-b' + (S.grpMode ? " on" : "") + '" data-act="grpmode" data-v="1">업체별 합계</button><button class="seg-b' + (!S.grpMode ? " on" : "") + '" data-act="grpmode" data-v="0">정산서별</button></span><button class="btn-line btn-small" data-act="ovmore" aria-expanded="' + !!S.ovMore + '">' + (S.ovMore ? "필터·설정 닫기" : "필터·설정 더 보기") + "</button></div></div>" +
-    (S.ovMore ? '<div class="rmore"><label class="muted small">세무 <select id="ftaxtype" aria-label="세무 필터"><option value="">전체</option>' + CONFIG.TAX_TYPES.map(t => "<option" + (f.tax === t ? " selected" : "") + ">" + t + "</option>").join("") + "</select></label>" + (showLegal ? '<label class="muted small">법률진행 <select id="flegal" aria-label="법률진행 필터"><option value="">전체</option><option value="none"' + (f.legal === "none" ? " selected" : "") + ">진행 안 함</option>" + STAGES.map((s, i) => '<option value="' + i + '"' + (f.legal === String(i) ? " selected" : "") + ">" + s + "</option>").join("") + "</select></label>" : "") +
-      '<label class="muted small" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="fop"' + (f.open ? " checked" : "") + '> 미해결만</label><label class="muted small">오래된 건 기준 <input type="number" id="fag" min="1" style="width:70px;height:36px" value="' + S.aging + '"> 일</label></div>' : "") +
+    '<div class="row"><span class="seg" role="group" aria-label="보기 방식"><button class="seg-b' + (S.grpMode ? " on" : "") + '" data-act="grpmode" data-v="1">업체별 합계</button><button class="seg-b' + (!S.grpMode ? " on" : "") + '" data-act="grpmode" data-v="0">정산서별</button></span></div></div>' +
+    ('<div class="rmore"><label class="small"><b>세무방식</b> <select id="ftaxtype" aria-label="세무방식 필터"><option value="">전체</option>' + CONFIG.TAX_TYPES.map(t => "<option" + (f.tax === t ? " selected" : "") + ">" + t + "</option>").join("") + "</select></label>" + (showLegal ? '<label class="small"><b>법률진행</b> <select id="flegal" aria-label="법률진행 필터"><option value="">전체</option><option value="none"' + (f.legal === "none" ? " selected" : "") + ">진행 안 함</option>" + STAGES.map((s, i) => '<option value="' + i + '"' + (f.legal === String(i) ? " selected" : "") + ">" + s + "</option>").join("") + "</select></label>" : "") +
+      '<label class="muted small" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="fop"' + (f.open ? " checked" : "") + '> 미해결만</label><label class="muted small">오래된 건 기준 <input type="number" id="fag" min="1" style="width:70px;height:36px" value="' + S.aging + '"> 일</label></div>') +
     '<div id="ovTable">' + overviewTable() + "</div></section>" +
     '<div class="rhelp"><button class="lnk" data-act="ovhelp">' + (S.ovHelp ? "도움말 닫기" : "용어 도움말") + "</button>" + (S.ovHelp ? ovGlossary() : "") + "</div>";
 }
@@ -3622,7 +3629,7 @@ function vViewRead(){
   if (!tabs.some(x => x[0] === S.vTab)) S.vTab = "claw";
   const eq = heroEq(cur);
   const qa = (tab, label, ic) => '<button class="btn-line" data-act="vtab" data-v="' + tab + '">' + ic + label + "</button>";
-  const hero = '<section class="card vhero"><div class="vh-main"><div class="vh-top">' + (done ? '<span class="badge b-green">환수 완료</span>' : badge(cur.status)) + '<span class="muted small">' + mmdd(cur.settle_date) + " 정산 · " + esc(cur.tax_type) + "</span>" + (cur.age != null ? '<span class="agepill ' + (cur.age >= S.aging ? "old" : "") + '">' + cur.age + "일 경과</span>" : "") + wmBadge(cur) + (lc ? '<span class="badge b-sky">' + STAGES[lc.stage] + "</span>" : "") + '</div><div class="vh-l">이 정산서에서 받을 돈</div><div class="vh-v">' + won(cur.unresolved) + '</div><div class="vh-eq">' + eq + ' <button class="lnk" data-act="vcalc">' + (S.vCalc ? "계산 닫기" : "계산 자세히 보기") + "</button></div>" + (cur.tax_type ? '<div class="vh-tax">세무방식 <b>' + esc(cur.tax_type) + "</b> · 공급가액 <b>" + won(cur.normal_sum - cur.claw_sum) + "</b> → 합계금 <b>" + won(taxTotal(cur)) + '</b> <span class="muted small">(' + taxNoteTxt(cur.tax_type) + ", −는 업체에서 받을 금액)</span></div>" : "") +
+  const hero = '<section class="card vhero"><div class="vh-main"><div class="vh-top">' + (done ? '<span class="badge b-green">환수 완료</span>' : badge(cur.status)) + '<span class="muted small">' + mmdd(cur.settle_date) + " 정산 · " + esc(cur.tax_type) + "</span>" + (cur.age != null ? '<span class="agepill ' + (cur.age >= S.aging ? "old" : "") + '">' + cur.age + "일 경과</span>" : "") + wmBadge(cur) + (lc ? '<span class="badge b-sky">' + STAGES[lc.stage] + "</span>" : "") + '</div><div class="vh-l">이 정산서에서 받을 돈</div><div class="vh-v">' + won(cur.unresolved) + '</div><div class="vh-eq">' + eq + ' <button class="lnk" data-act="vcalc">' + (S.vCalc ? "계산 닫기" : "계산 자세히 보기") + "</button></div>" + (cur.tax_type ? (CONFIG.DISP_VAT ? '<div class="vh-tax">세무방식 <b>' + esc(cur.tax_type) + "</b> · " + (cur.tax_type === "원천세" ? "금액은 <b>공급가액</b> 기준으로 표시돼요" : "금액은 <b>부가세 " + String(+(CONFIG.VAT * 100).toFixed(2)) + "% 포함</b>으로 표시돼요 <span class=\"muted small\">(공급가액 " + won(cur.normal_sum_supply - cur.claw_sum_supply) + " → " + won(cur.normal_sum - cur.claw_sum) + ")</span>") + "</div>" : '<div class="vh-tax">세무방식 <b>' + esc(cur.tax_type) + "</b> · 공급가액 <b>" + won(cur.normal_sum - cur.claw_sum) + "</b> → 합계금 <b>" + won(taxTotal(cur)) + '</b> <span class="muted small">(' + taxNoteTxt(cur.tax_type) + ", −는 업체에서 받을 금액)</span></div>") : "") +
     '<div class="vh-acts">' + (can.action() ? qa("log", "처리 기록 추가", ico("plus", 18)) : "") + (FEAT.dun || FEAT.plans ? qa("plan", "독촉 · 약정", ico("clip", 18)) : "") + (S.legalOK ? qa("legal", "법률진행", ico("scale", 18)) : "") + "</div></div>" +
     '<div class="vh-side"><div class="vs-h">이 업체 전체</div><div class="vs-i"><span class="muted small">남은 환수금 합계</span><b>' + won(mine.reduce((t, r) => t + r.unresolved, 0)) + '</b></div><div class="vs-i"><span class="muted small">정산서</span><b>' + mine.length + "건 <small>미해결 " + open.length + '</small></b></div><div class="vs-i"><span class="muted small">가장 오래된 미해결</span><b>' + (ages.length ? Math.max(...ages) + "일" : "-") + "</b></div></div></section>" + (S.vCalc ? '<div class="vcalc">' + P.flow + "</div>" : "");
   const strip = '<div class="wkstrip"><span class="muted small">주차 선택</span>' + mine.map(r => { const dn = FEAT.completed && isDone(r); return '<button class="wkc' + (r.settle_date === cur.settle_date ? " sel" : "") + (dn ? " done" : "") + (urgClass(r) ? " " + urgClass(r) : "") + '" data-act="open" data-p="' + esc(r.partner) + '" data-d="' + r.settle_date + '" aria-pressed="' + (r.settle_date === cur.settle_date) + '"><b>' + mmdd(r.settle_date) + "</b><span>" + (dn ? "완료" : won(r.unresolved)) + "</span>" + (r.age != null ? "<small>" + r.age + "일</small>" : "") + "</button>"; }).join("") + "</div>";
