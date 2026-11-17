@@ -708,7 +708,12 @@ function toISO(v){
   const m = String(v).match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/);
   return m ? m[1] + "-" + pad2(+m[2]) + "-" + pad2(+m[3]) : "";
 }
-function stripMarks(s){ return String(s == null ? "" : s).replace(/[■□▪▫●○◎◆◇▲△]/g, "").trim(); }
+/* 업체 이름 앞뒤에 붙은 기호(■ ★ ◆ ※ ▶ ○ ● □ … 어떤 기호든)는 등록할 때 모두 뗍니다. 이름 안의 글자·숫자·괄호 — (주) · ㈜ · (YK프리존) 같은 것은 그대로 둡니다 */
+function stripMarks(s){
+  let t = String(s == null ? "" : s).replace(/\s+/g, " ").trim();
+  t = t.replace(/^[^\p{L}\p{N}(\[（【\u3200-\u32FF]+/u, "").replace(/[^\p{L}\p{N})\]）】\u3200-\u32FF]+$/u, "");
+  return t.trim();
+}
 function maskName(n, style){
   const ch = Array.from(String(n == null ? "" : n).trim());
   if (!ch.length) return "";
