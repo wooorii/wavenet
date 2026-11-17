@@ -1736,8 +1736,8 @@ function vView(){
   const relNote = relL.length ? ' <span class="muted small">· 정산관련 ' + relL.length + "건 " + fmt(relSum) + "원 포함</span>" : "";
   const normalHtml = '<div class="sec k-norm">② 이번 정산 일반 정산 건' + (nlines.length ? " (" + nlines.length + "건)" : "") + "</div>" +
     (!S.normalOK ? setupNote("일반 정산 건 이력 칸이 아직 설정되지 않았어요.") + '<div class="card form muted">일반 정산금 합계 ' + won(cur.normal_sum) + "만 저장되어 있어요.</div>"
-      : nlines.length ? '<div class="card tw"><table style="min-width:720px"><thead><tr><th>번호</th><th class="l">고객</th>' + (nlines.some(l => l.svc_no) ? '<th class="l">가입서비스</th>' : "") + '<th class="l">상품</th><th>개통일</th><th class="n">정산금액</th><th class="l">정산 비고</th></tr></thead><tbody>' +
-        nlines.map(l => '<tr' + (isSettleRel(l) ? ' class="rel"' : "") + '><td class="muted">' + (l.src_no == null ? "" : l.src_no) + '</td><td class="l"><b>' + esc(l.customer_mask) + '</b></td>' + (nlines.some(x => x.svc_no) ? '<td class="l small svc">' + esc(l.svc_no || "-") + "</td>" : "") + '<td class="l">' + esc(l.product) + (isSettleRel(l) ? ' <span class="badge b-amber">정산관련</span>' : "") + "</td><td>" + esc(l.open_date || "") + '</td><td class="n"><b class="blue">' + fmt(l.amount) + '</b></td><td class="l small muted">' + esc(l.note || "") + "</td></tr>").join("") +
+      : nlines.length ? '<div class="card tw"><table style="min-width:720px"><thead><tr><th>번호</th><th class="l">고객</th>' + (nlines.some(l => l.svc_no) ? '<th class="l">가입서비스</th>' : "") + (nlines.some(l => l.agent) ? '<th class="l">유치자</th>' : "") + '<th class="l">상품</th><th>개통일</th><th class="n">정산금액</th><th class="l">정산 비고</th></tr></thead><tbody>' +
+        nlines.map(l => '<tr' + (isSettleRel(l) ? ' class="rel"' : "") + '><td class="muted">' + (l.src_no == null ? "" : l.src_no) + '</td><td class="l"><b>' + esc(l.customer_mask) + '</b></td>' + (nlines.some(x => x.svc_no) ? '<td class="l small svc">' + esc(l.svc_no || "-") + "</td>" : "") + (nlines.some(x => x.agent) ? '<td class="l small">' + esc(agentLabel(l, cur.partner) || "-") + "</td>" : "") + '<td class="l">' + esc(l.product) + (isSettleRel(l) ? ' <span class="badge b-amber">정산관련</span>' : "") + "</td><td>" + esc(l.open_date || "") + '</td><td class="n"><b class="blue">' + fmt(l.amount) + '</b></td><td class="l small muted">' + esc(l.note || "") + "</td></tr>").join("") +
         '<tr class="tot"><td colspan="4" style="text-align:right">일반 정산금 합계</td><td class="n">' + fmt(nSum) + "</td><td>" + (nSum === Number(cur.normal_sum) ? '<span class="muted small">정산서 합계와 같아요</span>' : '<span class="warn">정산서 합계 ' + fmt(cur.normal_sum) + "원과 달라요</span>") + relNote + "</td></tr></tbody></table></div>"
       : '<div class="card form muted">' + (Number(cur.normal_sum) !== 0 ? "이 정산서는 일반 정산 건 상세가 저장되지 않았고 합계(" + won(cur.normal_sum) + ")만 있어요. 같은 파일을 다시 올리면(덮어쓰기) 상세가 남아요." : "일반 정산 건이 없어요.") + "</div>");
   const flowHtml = '<div class="flowwrap"><section class="card flowcard"><div class="flowrow">' +
@@ -1844,6 +1844,12 @@ function bulkTaxBar(fi){
   const state = ["정발행", "역발행", "원천세", "미선택"].filter(k => cnt[k]).map(k => k + " " + cnt[k]).join(" · ");
   return '<div class="' + (fi < 0 ? "card form bulk-tax" : "bulk-file") + '"><div class="row" style="gap:10px;flex-wrap:wrap;align-items:center"><b>' + (fi < 0 ? "세무방식 일괄 설정" : "이 파일 " + gs.length + "개 일괄 설정") + '</b>' + (fi < 0 ? '<span class="muted small">올린 파일 전체 ' + gs.length + "개 정산서(업체·정산일)</span>" : "") + '<select id="' + id + '" aria-label="세무방식 일괄 선택"><option value="">세무방식 선택</option>' + CONFIG.TAX_TYPES.map(t => "<option" + (cur === t ? " selected" : "") + ">" + t + "</option>").join("") + '</select><button class="btn-main btn-small" data-act="bulktax" data-fi="' + fi + '" data-m="empty"' + (empty ? "" : " disabled") + '>선택 안 한 ' + empty + '개에 적용</button><button class="btn-line btn-small" data-act="bulktax" data-fi="' + fi + '" data-m="all">전부 ' + gs.length + '개 바꾸기</button></div><div class="muted small" style="margin-top:6px">현재: ' + state + "</div></div>";
 }
+/* 정산서 등록 미리보기: 정산금액이 양수인 고객(업체에 줄 돈)도 함께 보여 줌 — 헷갈리지 않게 */
+function normalTableHtml(g){
+  const ns = g.normalLines || []; if (!ns.length) return "";
+  const f = pvf(g), has = k => ns.some(l => l[k]);
+  return '<div class="muted small" style="margin:14px 0 4px"><b>일반 정산 고객 ' + ns.length + "명</b> (정산금액이 양수 — 업체에 줄 돈) · 합계 " + won(Math.round(ns.reduce((t, l) => t + l.amount, 0) * f)) + (S.normalOK ? " · 이력으로 함께 저장돼요" : "") + '</div><div class="tw"><table style="min-width:640px"><thead><tr><th>번호</th><th class="l">고객</th>' + (has("svc_no") ? '<th class="l">가입서비스</th>' : "") + (has("agent") ? '<th class="l">유치자</th>' : "") + '<th class="l">상품</th><th>개통일</th><th class="n">정산금액</th></tr></thead><tbody>' + ns.map(l => "<tr><td>" + (l.src_no == null ? "" : l.src_no) + '</td><td class="l">' + esc(l.customer_mask) + "</td>" + (has("svc_no") ? '<td class="l small svc">' + esc(l.svc_no || "-") + "</td>" : "") + (has("agent") ? '<td class="l small">' + esc(agentLabel(l, g.partner) || "-") + "</td>" : "") + '<td class="l">' + esc(l.product || "") + "</td><td>" + esc(l.open_date ? ds(l.open_date) : "") + '</td><td class="n"><b class="blue">' + fmt(Math.round(l.amount * f)) + "</b></td></tr>").join("") + "</tbody></table></div>";
+}
 function vUpload(){
   let h = '<div class="head"><div><div class="cap">정산서 등록</div><h1>정산내역서를 올리면<br>환수 건만 골라서 저장해요</h1><p class="sub">파일은 이 브라우저 안에서만 읽고 서버로 올리지 않아요. 고객명은 가운데 글자를 가려서 저장하고, ' + (S.subServerOK && can.manage() ? '가입번호는 화면에 표시하지 않고, 아래에서 고르면 보관함에 따로 저장해요.' : '회선번호·가입번호는 읽지 않아요.') + (S.phoneOK ? ' 연락처는 직접 입력하면 뒤 4자리를 가려서(010-5555-○○○○) 저장하고, 입력한 전체 번호는 저장하지 않아요.' : '') + '</p></div></div>' +
     '<div class="drop" id="drop">정산내역서 엑셀 파일(.xlsx)을 여기에 끌어다 놓거나 눌러서 선택하세요<br><span class="muted small">여러 파일을 한 번에 올릴 수 있어요</span><input type="file" id="file" multiple accept=".xlsx,.xls" style="display:none"></div>' +
@@ -1858,14 +1864,14 @@ function vUpload(){
       h += '<div style="border-top:1px solid #EEF0F3;margin-top:12px;padding-top:12px"><div class="row"><b style="font-size:16px">' + esc(g.partner) + '</b><span class="muted">' + g.settleDate + ' 정산</span><label class="muted">세무유형</label><select data-g="tax" data-fi="' + fi + '" data-gi="' + gi + '"><option value="">선택</option>' + CONFIG.TAX_TYPES.map(t => "<option" + (g.taxType === t ? " selected" : "") + ">" + t + "</option>").join("") + "</select>" + (g.taxFrom ? '<span class="muted small">' + (g.taxFrom === "일괄 설정" ? "일괄 설정으로 선택" : "자동 선택: " + esc(g.taxFrom)) + "</span>" : "") + agentChips(g) + wmGroupHtml(fi, gi, g) + "</div>" +
         '<div class="row" style="gap:20px;margin:8px 0"><span>일반 ' + g.normalCount + "건 합계 <b>" + won(Math.round(g.normalSum * pvf(g))) + "</b></span><span>환수 " + g.lines.length + '건 합계 <b class="red">' + won(Math.round(g.clawSum * pvf(g))) + "</b></span><span>상계 후 총합계 <b>" + won(Math.max(0, Math.round(g.clawSum * pvf(g)) - Math.round(g.normalSum * pvf(g)))) + "</b></span>" + (pvf(g) !== 1 ? '<span class="muted small">(부가세 포함 금액)</span>' : "") + (S.subServerOK && can.manage() ? '<span class="muted">가입번호 ' + g.lines.filter(l => l.sub_no).length + "건 읽음 · " + (S.keepSub ? "보관 예정" : "보관 안 함") + "</span>" : "") + "</div>" + taxSumHtml(g) + normalNote(g);
       if (ex) h += '<div class="row"><span class="badge b-amber">이미 등록된 정산서</span><label class="muted small"><input type="checkbox" data-g="ow" data-fi="' + fi + '" data-gi="' + gi + '"' + (g.overwrite ? " checked" : "") + "> 덮어쓰기 (처리기록·세금계산서 상태는 유지돼요)</label></div>";
-      if (!g.lines.length){ h += '<p class="muted small">환수 건이 없는 정산서라 저장하지 않아요.</p></div>'; return; }
+      if (!g.lines.length){ h += (CONFIG.CHAIN && g.normalCount ? '<p class="muted small">환수 건 없이 <b>일반 정산(정상 지급)만</b> 있는 정산서예요. 저장하면 앞 정산서에 남은 환수금이 이 정산서로 넘어와서 일반 정산금에서 먼저 빠져요.</p>' + normalTableHtml(g) : '<p class="muted small">환수 건이 없는 정산서라 저장하지 않아요.</p>') + "</div>"; return; }
       g.warnings.forEach(w => { h += '<div class="warn">⚠ ' + esc(w) + "</div>"; });
       h += '<div class="tw" style="margin-top:8px"><table style="min-width:760px"><thead><tr><th>번호</th><th class="l">고객</th>' + (g.lines.some(l => l.svc_no) ? '<th class="l">가입서비스</th>' : "") + (g.lines.some(l => l.agent) ? '<th class="l">유치자</th>' : "") + (S.phoneOK ? "<th>명의자 연락처</th>" : "") + '<th class="l">상품</th><th>개통일</th><th>해지일</th><th>환수율(%)</th><th class="n">환수금액</th></tr></thead><tbody>' +
-        g.lines.map((l, li) => "<tr><td>" + (l.src_no == null ? "" : l.src_no) + '</td><td class="l">' + esc(l.customer_mask) + '</td>' + (g.lines.some(x => x.svc_no) ? '<td class="l small svc">' + esc(l.svc_no || "-") + "</td>" : "") + (g.lines.some(x => x.agent) ? '<td class="l small">' + esc(agentLabel(l, g.partner) || "-") + "</td>" : "") + (S.phoneOK ? '<td><input type="text" data-g="phone" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.phone || "") + '" placeholder="010-0000-0000" style="width:150px;height:36px"></td>' : "") + '<td class="l">' + esc(l.product) + "</td><td>" + esc(l.open_date) + '</td><td><input type="date" data-g="term" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.term_date) + '" style="height:36px"></td><td><input type="number" min="0" max="100" data-g="rate" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + (l.rate_pct == null ? "" : l.rate_pct) + '" style="width:80px;height:36px"></td><td class="n">' + fmt(Math.round(l.amount * pvf(g))) + "</td></tr>").join("") + "</tbody></table></div></div>";
+        g.lines.map((l, li) => "<tr><td>" + (l.src_no == null ? "" : l.src_no) + '</td><td class="l">' + esc(l.customer_mask) + '</td>' + (g.lines.some(x => x.svc_no) ? '<td class="l small svc">' + esc(l.svc_no || "-") + "</td>" : "") + (g.lines.some(x => x.agent) ? '<td class="l small">' + esc(agentLabel(l, g.partner) || "-") + "</td>" : "") + (S.phoneOK ? '<td><input type="text" data-g="phone" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.phone || "") + '" placeholder="010-0000-0000" style="width:150px;height:36px"></td>' : "") + '<td class="l">' + esc(l.product) + "</td><td>" + esc(l.open_date) + '</td><td><input type="date" data-g="term" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + esc(l.term_date) + '" style="height:36px"></td><td><input type="number" min="0" max="100" data-g="rate" data-fi="' + fi + '" data-gi="' + gi + '" data-li="' + li + '" value="' + (l.rate_pct == null ? "" : l.rate_pct) + '" style="width:80px;height:36px"></td><td class="n">' + fmt(Math.round(l.amount * pvf(g))) + "</td></tr>").join("") + "</tbody></table></div>" + normalTableHtml(g) + "</div>";
     });
     h += "</div>";
   });
-  if (S.staged.some(f => f.groups && f.groups.some(g => g.lines.length))) h += '<div class="row"><button class="btn-main" data-act="savestaged">저장하기</button><button class="btn-line" data-act="clearstaged">취소(화면 비우기)</button></div>';
+  if (S.staged.some(f => f.groups && f.groups.some(g => g.lines.length || (CONFIG.CHAIN && g.normalCount)))) h += '<div class="row"><button class="btn-main" data-act="savestaged">저장하기</button><button class="btn-line" data-act="clearstaged">취소(화면 비우기)</button></div>';
   return h;
 }
 function bindDrop(){
@@ -1892,7 +1898,7 @@ async function handleFiles(files){
 }
 async function saveStaged(){
   const todo = [];
-  for (const f of S.staged) for (const g of (f.groups || [])) if (g.lines.length) todo.push(g);
+  for (const f of S.staged) for (const g of (f.groups || [])) if (g.lines.length || (CONFIG.CHAIN && g.normalCount)) todo.push(g);
   if (!todo.length){ toast("저장할 환수 건이 없어요. (금액이 음수인 환수 줄이 있는 정산서만 저장해요)", true); return; }
   for (const g of todo){
     if (!g.taxType){ toast(g.partner + ": 세무유형을 선택하세요.", true); return; }
@@ -3690,6 +3696,10 @@ function vParts(html){
   });
   return P;
 }
+function normalSection(cur, P){
+  if (S.normalOK) return cur.nlines.length ? '<div class="sec k-norm">같은 정산서의 일반 정산 고객 ' + cur.nlines.length + '명 <span class="muted small">(정산금액이 양수 — 업체에 줄 돈)</span></div>' + P.norm : '<div class="muted small" style="margin:12px 4px">이 정산서에는 일반 정산(양수) 고객이 없어요.</div>';
+  return (S.mode === "live" && cur.normal_sum > 0) ? '<div class="card form muted small" style="margin-top:12px">이 정산서에는 일반 정산 고객(정상 지급, 정산금액이 양수)도 있지만 아직 저장되지 않아서 보이지 않아요. 관리자가 서버 설정 10(<b>10_일반정산건.sql</b>)을 돌린 뒤 이 정산서를 <b>덮어쓰기</b>로 다시 올리면 같이 보여요.</div>' : "";
+}
 function vViewRead(){
   const html = vViewOld(); if (!/id="vp"/.test(html)) return layoutBar() + html;
   const P = vParts(html), cur = S.rows.find(r => r.partner === S.sel.partner && r.settle_date === S.sel.date), mine = S.rows.filter(r => r.partner === S.sel.partner).sort((a, b) => a.settle_date < b.settle_date ? 1 : -1);
@@ -3706,7 +3716,7 @@ function vViewRead(){
   const strip = '<div class="wkstrip"><span class="muted small">주차 선택</span>' + mine.map(r => { const dn = FEAT.completed && isDone(r); return '<button class="wkc' + (r.settle_date === cur.settle_date ? " sel" : "") + (dn ? " done" : "") + (urgClass(r) ? " " + urgClass(r) : "") + '" data-act="open" data-p="' + esc(r.partner) + '" data-d="' + r.settle_date + '" aria-pressed="' + (r.settle_date === cur.settle_date) + '"><b>' + mmdd(r.settle_date) + "</b><span>" + (dn ? "완료" : (r.moved_out ? "이월됨" : won(r.unresolved))) + "</span>" + (r.age != null ? "<small>" + r.age + "일</small>" : "") + "</button>"; }).join("") + "</div>";
   const tabbar = '<div class="tabbar" role="tablist">' + tabs.map(([k, l, ic, n]) => '<button class="tabb' + (S.vTab === k ? " on" : "") + '" data-act="vtab" data-v="' + k + '" role="tab">' + ic + "<span>" + l + "</span>" + (n != null && n !== "" ? "<small>" + n + "</small>" : "") + "</button>").join("") + "</div>";
   let body = "";
-  if (S.vTab === "claw") body = P.wm + P.claw;
+  if (S.vTab === "claw") body = P.wm + P.claw + normalSection(cur, P);
   else if (S.vTab === "norm") body = P.norm;
   else if (S.vTab === "log") body = P.log + P.logform;
   else if (S.vTab === "plan") body = P.dun + P.plan;
@@ -4051,7 +4061,17 @@ makeLiveAPI = function(){
   const base = makeLiveAPIv31(), baseLoad = base.load;
   base.load = async function(){
     const d = await baseLoad(); const pr = await S.sb.from("members").select("works_email").limit(1), lg = await fetchOptional("nw_login_log");
-    d.caps.nwlogin = !pr.error && lg.ok; const ag = await S.sb.from("clawback_lines").select("agent").limit(1); d.caps.agents = !ag.error; const sv = await S.sb.from("clawback_lines").select("svc_no").limit(1); d.caps.svc = !sv.error; d.nwLog = lg.data.slice().sort((a, b) => b.id - a.id); return d;
+    d.caps.nwlogin = !pr.error && lg.ok; const ag = await S.sb.from("clawback_lines").select("agent").limit(1); d.caps.agents = !ag.error; const sv = await S.sb.from("clawback_lines").select("svc_no").limit(1); d.caps.svc = !sv.error; d.nwLog = lg.data.slice().sort((a, b) => b.id - a.id);
+    const nl = await fetchOptional("normal_lines"); d.normalLines = nl.ok ? nl.data : []; d.normalOK = nl.ok; return d;
+  };
+  const baseSave = base.saveStatement;
+  base.saveStatement = async (stmt, lines, overwrite, normalLines) => {
+    const id = await baseSave(stmt, lines, overwrite);
+    if (S.normalOK && Array.isArray(normalLines)){
+      const items = normalLines.map(l => ({ src_no: l.src_no == null ? null : l.src_no, customer_mask: l.customer_mask, product: l.product, open_date: l.open_date || null, amount: Math.round(l.amount), note: l.note || "", agent: l.agent || null, svc_no: l.svc_no || null }));
+      const { error } = await S.sb.rpc("save_normal_lines", { p_statement_id: id, p_items: items }); if (error) throw new Error("정산서는 저장됐지만 일반 정산 고객 저장에 실패했어요: " + error.message);
+    }
+    return id;
   };
   base.setWorksEmail = async (member, works) => { const { error } = await S.sb.rpc("member_set_works_email", { p_member: member, p_works: works }); if (error) throw new Error(error.message); };
   return base;
